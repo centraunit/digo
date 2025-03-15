@@ -1,4 +1,4 @@
-package services_test
+package digo_test
 
 import (
 	"context"
@@ -6,8 +6,8 @@ import (
 	"sync"
 	"testing"
 
-	services "github.com/centraunit/goallin_services"
-	"github.com/centraunit/goallin_services/mock"
+	"github.com/centraunit/digo"
+	"github.com/centraunit/digo/mock"
 	"github.com/stretchr/testify/suite"
 )
 
@@ -16,7 +16,7 @@ type ConcurrentTestSuite struct {
 }
 
 func (s *ConcurrentTestSuite) SetupTest() {
-	services.Reset()
+	digo.Reset()
 }
 
 func (s *ConcurrentTestSuite) TestConcurrentAccess() {
@@ -24,9 +24,9 @@ func (s *ConcurrentTestSuite) TestConcurrentAccess() {
 	errors := make(chan error, 10)
 
 	// Bind service once before starting goroutines
-	ctx := services.NewContainerContext(context.Background())
+	ctx := digo.NewContainerContext(context.Background())
 	db := &mock.MockDB{}
-	err := services.BindTransient[mock.Database](db, ctx)
+	err := digo.BindTransient[mock.Database](db, ctx)
 	s.NoError(err)
 
 	for i := 0; i < 5; i++ {
@@ -34,7 +34,7 @@ func (s *ConcurrentTestSuite) TestConcurrentAccess() {
 		go func(id int) {
 			defer wg.Done()
 			// Each goroutine just resolves the service
-			instance, err := services.ResolveTransient[mock.Database]()
+			instance, err := digo.ResolveTransient[mock.Database]()
 			if err != nil {
 				errors <- err
 				return
@@ -55,10 +55,10 @@ func (s *ConcurrentTestSuite) TestConcurrentAccess() {
 func (s *ConcurrentTestSuite) TestConcurrentConditionalBindings() {
 	// Test that conditional binding gets overwritten
 	s.Run("BindingOverwrite", func() {
-		ctx := services.NewContainerContext(context.Background()).
+		ctx := digo.NewContainerContext(context.Background()).
 			WithValue("key", "value-1").
 			WithValue("request_id", "req-1")
-		ctx2 := services.NewContainerContext(context.Background()).
+		ctx2 := digo.NewContainerContext(context.Background()).
 			WithValue("key", "value-1").
 			WithValue("request_id", "req-2")
 
@@ -66,17 +66,17 @@ func (s *ConcurrentTestSuite) TestConcurrentConditionalBindings() {
 		db2 := &mock.MockDB{}
 
 		// Register first conditional binding
-		services.BindTransient[mock.Database](db1, ctx, func(resolveCtx *services.ContainerContext) (services.Lifecycle, error) {
+		digo.BindTransient[mock.Database](db1, ctx, func(resolveCtx *digo.ContainerContext) (digo.Lifecycle, error) {
 			return db1, nil
 		})
 
 		// This should overwrite the previous binding
-		services.BindTransient[mock.Database](db2, ctx2, func(resolveCtx *services.ContainerContext) (services.Lifecycle, error) {
+		digo.BindTransient[mock.Database](db2, ctx2, func(resolveCtx *digo.ContainerContext) (digo.Lifecycle, error) {
 			return db2, nil
 		})
 
 		// Resolve should return db2, not db1
-		instance, err := services.ResolveTransient[mock.Database]()
+		instance, err := digo.ResolveTransient[mock.Database]()
 		s.NoError(err)
 		reqId, err := instance.GetContextValue("request_id")
 		s.NoError(err)
@@ -88,14 +88,14 @@ func (s *ConcurrentTestSuite) TestConcurrentConditionalBindings() {
 		var wg sync.WaitGroup
 		errors := make(chan error, 10)
 
-		ctx := services.NewContainerContext(context.Background()).
+		ctx := digo.NewContainerContext(context.Background()).
 			WithValue("key", "test-value").
 			WithValue("request_id", "req-1")
 
 		db := &mock.MockDB{}
 
 		fmt.Println("binding db")
-		services.BindTransient[mock.Database](db, ctx, func(resolveCtx *services.ContainerContext) (services.Lifecycle, error) {
+		digo.BindTransient[mock.Database](db, ctx, func(resolveCtx *digo.ContainerContext) (digo.Lifecycle, error) {
 			val := resolveCtx.Value("key")
 			if val != nil && val.(string) == "test-value" {
 				return db, nil
@@ -109,7 +109,7 @@ func (s *ConcurrentTestSuite) TestConcurrentConditionalBindings() {
 			go func(id int) {
 				defer wg.Done()
 				fmt.Printf("resolving db %d\n", id)
-				instance, err := services.ResolveTransient[mock.Database]()
+				instance, err := digo.ResolveTransient[mock.Database]()
 				if err != nil {
 					errors <- err
 					return

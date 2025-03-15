@@ -1,4 +1,4 @@
-package services_test
+package digo_test
 
 import (
 	"context"
@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"testing"
 
-	services "github.com/centraunit/goallin_services"
-	"github.com/centraunit/goallin_services/mock"
+	"github.com/centraunit/digo"
+	"github.com/centraunit/digo/mock"
 	"github.com/stretchr/testify/suite"
 )
 
@@ -16,27 +16,27 @@ type ContextTestSuite struct {
 }
 
 func (s *ContextTestSuite) SetupTest() {
-	services.Shutdown(true)
+	digo.Shutdown(true)
 }
 
 func (s *ContextTestSuite) TestContextInheritance() {
 	s.Run("ValueOverriding", func() {
 		// Create a DB with global context value
-		globalCtx := services.NewContainerContext(context.Background()).
+		globalCtx := digo.NewContainerContext(context.Background()).
 			WithValue("shared", "base-value").
 			WithValue("request_id", "req-1")
 		db1 := &mock.MockDB{}
-		services.BindRequest[mock.Database](db1, globalCtx)
+		digo.BindRequest[mock.Database](db1, globalCtx)
 
 		// Create a DB with local context that overrides global value
-		localCtx := services.NewContainerContext(context.Background()).
+		localCtx := digo.NewContainerContext(context.Background()).
 			WithValue("shared", "override-value").
 			WithValue("request_id", "req-2")
 		db2 := &mock.MockDB{}
-		services.BindRequest[mock.Database](db2, localCtx)
+		digo.BindRequest[mock.Database](db2, localCtx)
 
 		// Verify context values are preserved during OnBoot
-		instance, err := services.ResolveRequest[mock.Database]()
+		instance, err := digo.ResolveRequest[mock.Database]()
 		s.NoError(err)
 		s.NotNil(instance)
 		val, err := instance.(*mock.MockDB).GetContextValue("shared")
@@ -45,13 +45,13 @@ func (s *ContextTestSuite) TestContextInheritance() {
 	})
 
 	s.Run("ConditionalBindingWithContext", func() {
-		ctx := services.NewContainerContext(context.Background()).
+		ctx := digo.NewContainerContext(context.Background()).
 			WithValue("env", "prod").
 			WithValue("request_id", "req-1")
 
 		prodDB := &mock.MockDB{}
 
-		services.BindTransient[mock.Database](prodDB, ctx, func(resolveCtx *services.ContainerContext) (services.Lifecycle, error) {
+		digo.BindTransient[mock.Database](prodDB, ctx, func(resolveCtx *digo.ContainerContext) (digo.Lifecycle, error) {
 			val := resolveCtx.Value("env")
 			if val != nil && val.(string) == "prod" {
 				return prodDB, nil
@@ -59,7 +59,7 @@ func (s *ContextTestSuite) TestContextInheritance() {
 			return nil, fmt.Errorf("condition not met")
 		})
 
-		instance, err := services.ResolveTransient[mock.Database]()
+		instance, err := digo.ResolveTransient[mock.Database]()
 		s.NoError(err)
 		s.NotNil(instance)
 		val, err := instance.(*mock.MockDB).GetContextValue("env")
@@ -68,12 +68,12 @@ func (s *ContextTestSuite) TestContextInheritance() {
 	})
 
 	s.Run("MissingRequestID", func() {
-		ctx := services.NewContainerContext(context.Background())
+		ctx := digo.NewContainerContext(context.Background())
 		db := &mock.MockDB{}
-		services.BindRequest[mock.Database](db, ctx)
-		_, err := services.ResolveRequest[mock.Database]()
+		digo.BindRequest[mock.Database](db, ctx)
+		_, err := digo.ResolveRequest[mock.Database]()
 		s.Error(err)
-		var missingErr *services.MissingContextValueError
+		var missingErr *digo.MissingContextValueError
 		s.True(errors.As(err, &missingErr))
 		s.Equal("request_id", missingErr.Key)
 	})
@@ -81,16 +81,16 @@ func (s *ContextTestSuite) TestContextInheritance() {
 
 func (s *ContextTestSuite) TestParent() {
 	parentCtx := context.Background()
-	ctx := services.NewContainerContext(parentCtx)
+	ctx := digo.NewContainerContext(parentCtx)
 	s.Equal(parentCtx, ctx.Parent(), "Parent context should be preserved")
 }
 
 func (s *ContextTestSuite) TestMergeWith() {
-	ctx1 := services.NewContainerContext(context.Background()).
+	ctx1 := digo.NewContainerContext(context.Background()).
 		WithValue("key1", "value1").
 		WithValue("shared", "value1")
 
-	ctx2 := services.NewContainerContext(context.Background()).
+	ctx2 := digo.NewContainerContext(context.Background()).
 		WithValue("key2", "value2").
 		WithValue("shared", "value2")
 

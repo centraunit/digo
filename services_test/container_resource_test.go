@@ -1,11 +1,11 @@
-package services_test
+package digo_test
 
 import (
 	"context"
 	"testing"
 
-	services "github.com/centraunit/goallin_services"
-	"github.com/centraunit/goallin_services/mock"
+	"github.com/centraunit/digo"
+	"github.com/centraunit/digo/mock"
 	"github.com/stretchr/testify/suite"
 )
 
@@ -14,19 +14,19 @@ type ResourceTestSuite struct {
 }
 
 func (s *ResourceTestSuite) SetupTest() {
-	services.Reset()
+	digo.Reset()
 
 }
 
 func (s *ResourceTestSuite) TestTransientScope() {
-	ctx := services.NewContainerContext(context.Background())
+	ctx := digo.NewContainerContext(context.Background())
 	db := &mock.MockDB{}
-	err := services.BindTransient[mock.Database](db, ctx)
+	err := digo.BindTransient[mock.Database](db, ctx)
 	s.NoError(err)
 
-	instance1, err := services.ResolveTransient[mock.Database]()
+	instance1, err := digo.ResolveTransient[mock.Database]()
 	s.NoError(err)
-	instance2, err := services.ResolveTransient[mock.Database]()
+	instance2, err := digo.ResolveTransient[mock.Database]()
 	s.NoError(err)
 	s.Same(instance1, instance2)
 	s.True(instance2.(*mock.MockDB).IsConnected())
@@ -34,25 +34,25 @@ func (s *ResourceTestSuite) TestTransientScope() {
 
 func (s *ResourceTestSuite) TestRequestScope() {
 	db := &mock.MockDB{}
-	ctx := services.NewContainerContext(context.Background()).WithValue("request_id", "req-1")
+	ctx := digo.NewContainerContext(context.Background()).WithValue("request_id", "req-1")
 
-	err := services.BindRequest[mock.Database](db, ctx)
+	err := digo.BindRequest[mock.Database](db, ctx)
 	s.NoError(err)
 
-	instance1, err := services.ResolveRequest[mock.Database]()
+	instance1, err := digo.ResolveRequest[mock.Database]()
 	s.NoError(err)
 	s.True(instance1.(*mock.MockDB).IsConnected(), "OnBoot should be called")
 
-	instance2, err := services.ResolveRequest[mock.Database]()
+	instance2, err := digo.ResolveRequest[mock.Database]()
 	s.NoError(err)
 	s.Same(instance1, instance2)
 
-	ctx2 := services.NewContainerContext(context.Background()).WithValue("request_id", "req-2")
+	ctx2 := digo.NewContainerContext(context.Background()).WithValue("request_id", "req-2")
 	db2 := &mock.MockDB{}
-	err = services.BindRequest[mock.Database](db2, ctx2)
+	err = digo.BindRequest[mock.Database](db2, ctx2)
 	s.NoError(err)
 
-	instance3, err := services.ResolveRequest[mock.Database]()
+	instance3, err := digo.ResolveRequest[mock.Database]()
 	s.NoError(err)
 	s.NotSame(instance1, instance3)
 	s.True(instance3.(*mock.MockDB).IsConnected())
@@ -60,18 +60,18 @@ func (s *ResourceTestSuite) TestRequestScope() {
 
 func (s *ResourceTestSuite) TestMemoryCleanup() {
 	db := &mock.MockDB{}
-	ctx := services.NewContainerContext(context.Background()).WithValue("request_id", "req-1")
+	ctx := digo.NewContainerContext(context.Background()).WithValue("request_id", "req-1")
 
-	err := services.BindRequest[mock.Database](db, ctx)
+	err := digo.BindRequest[mock.Database](db, ctx)
 	s.NoError(err)
 
-	instance, err := services.ResolveRequest[mock.Database]()
+	instance, err := digo.ResolveRequest[mock.Database]()
 	s.NoError(err)
 	s.NotNil(instance)
 
-	services.Shutdown(true)
+	digo.Shutdown(true)
 
-	_, err = services.ResolveRequest[mock.Database]()
+	_, err = digo.ResolveRequest[mock.Database]()
 	s.Error(err, "Should not be able to resolve after Reset")
 }
 
@@ -81,34 +81,34 @@ func (s *ResourceTestSuite) TestLifecycleCleanup() {
 		// Create a singleton service
 		singletonDB := &mock.MockDB{}
 
-		singletonCtx := services.NewContainerContext(context.Background()).
+		singletonCtx := digo.NewContainerContext(context.Background()).
 			WithValue("request_id", "singleton-test")
-		err := services.BindSingleton[mock.Database](singletonDB, singletonCtx)
+		err := digo.BindSingleton[mock.Database](singletonDB, singletonCtx)
 		s.NoError(err)
 
 		// Create a request-scoped service
 		requestDB := &mock.MockDB{}
-		requestCtx := services.NewContainerContext(context.Background()).
+		requestCtx := digo.NewContainerContext(context.Background()).
 			WithValue("request_id", "request-test")
-		err = services.BindRequest[mock.Database](requestDB, requestCtx)
+		err = digo.BindRequest[mock.Database](requestDB, requestCtx)
 		s.NoError(err)
 
-		// Boot both services
-		err = services.Boot()
+		// Boot both digo
+		err = digo.Boot()
 		s.NoError(err)
 
 		// Verify singleton is initialized
-		instance, err := services.ResolveSingleton[mock.Database]()
+		instance, err := digo.ResolveSingleton[mock.Database]()
 		s.NoError(err)
 		s.Same(singletonDB, instance)
 		s.True(instance.(*mock.MockDB).IsConnected())
 
 		// Regular shutdown - should keep singletons
-		err = services.Shutdown(false)
+		err = digo.Shutdown(false)
 		s.NoError(err)
 
 		// Should still be able to resolve singleton
-		instance, err = services.ResolveSingleton[mock.Database]()
+		instance, err = digo.ResolveSingleton[mock.Database]()
 		s.NoError(err, "Singleton should still be resolvable after regular shutdown")
 		s.Same(singletonDB, instance, "Should get the same singleton instance")
 		s.True(instance.(*mock.MockDB).IsConnected(), "Singleton should still be initialized")
@@ -118,20 +118,20 @@ func (s *ResourceTestSuite) TestLifecycleCleanup() {
 	s.Run("CompleteShutdown", func() {
 		// Create a singleton service
 		singletonDB := &mock.MockDB{}
-		singletonCtx := services.NewContainerContext(context.Background()).
+		singletonCtx := digo.NewContainerContext(context.Background()).
 			WithValue("request_id", "singleton-test")
-		err := services.BindSingleton[mock.Database](singletonDB, singletonCtx)
+		err := digo.BindSingleton[mock.Database](singletonDB, singletonCtx)
 		s.NoError(err)
 
-		err = services.Boot()
+		err = digo.Boot()
 		s.NoError(err)
 
 		// Complete shutdown - should clear everything
-		err = services.Shutdown(true)
+		err = digo.Shutdown(true)
 		s.NoError(err)
 
 		// Should not be able to resolve anything
-		_, err = services.ResolveSingleton[mock.Database]()
+		_, err = digo.ResolveSingleton[mock.Database]()
 		s.Error(err, "Nothing should be resolvable after complete shutdown")
 	})
 }

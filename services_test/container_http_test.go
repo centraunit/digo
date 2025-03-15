@@ -1,12 +1,12 @@
-package services_test
+package digo_test
 
 import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
-	services "github.com/centraunit/goallin_services"
-	"github.com/centraunit/goallin_services/mock"
+	"github.com/centraunit/digo"
+	"github.com/centraunit/digo/mock"
 	"github.com/stretchr/testify/suite"
 )
 
@@ -15,18 +15,18 @@ type HTTPTestSuite struct {
 }
 
 func (s *HTTPTestSuite) SetupTest() {
-	services.Reset()
+	digo.Reset()
 }
 
 // Middleware to handle container lifecycle
 func containerMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Create request context with unique ID
-		ctx := services.NewContainerContext(r.Context()).
+		ctx := digo.NewContainerContext(r.Context()).
 			WithValue("request_id", r.Header.Get("X-Request-ID"))
 
 		// Boot container before request
-		if err := services.Boot(); err != nil {
+		if err := digo.Boot(); err != nil {
 			http.Error(w, "Container boot failed", http.StatusInternalServerError)
 			return
 		}
@@ -35,7 +35,7 @@ func containerMiddleware(next http.Handler) http.Handler {
 		next.ServeHTTP(w, r.WithContext(ctx))
 
 		// Shutdown after request (keep singletons)
-		if err := services.Shutdown(false); err != nil {
+		if err := digo.Shutdown(false); err != nil {
 			http.Error(w, "Container shutdown failed", http.StatusInternalServerError)
 			return
 		}
@@ -47,10 +47,10 @@ func (s *HTTPTestSuite) TestRequestScopeLifecycle() {
 	handler1 := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Bind and resolve request-scoped service
 		db := &mock.MockDB{}
-		err := services.BindRequest[mock.Database](db, r.Context().(*services.ContainerContext))
+		err := digo.BindRequest[mock.Database](db, r.Context().(*digo.ContainerContext))
 		s.NoError(err)
 
-		instance, err := services.ResolveRequest[mock.Database]()
+		instance, err := digo.ResolveRequest[mock.Database]()
 		s.NoError(err)
 		s.True(instance.(*mock.MockDB).IsConnected())
 
@@ -59,7 +59,7 @@ func (s *HTTPTestSuite) TestRequestScopeLifecycle() {
 
 	handler2 := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Try to resolve the same request-scoped service (should be different instance)
-		instance, err := services.ResolveRequest[mock.Database]()
+		instance, err := digo.ResolveRequest[mock.Database]()
 		s.Error(err) // Should fail as it's a new request
 		s.Nil(instance)
 
@@ -95,15 +95,15 @@ func (s *HTTPTestSuite) TestTransientScopeLifecycle() {
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Bind transient service
 		db := &mock.MockDB{}
-		err := services.BindTransient[mock.Database](db, r.Context().(*services.ContainerContext))
+		err := digo.BindTransient[mock.Database](db, r.Context().(*digo.ContainerContext))
 		s.NoError(err)
 
 		// Resolve multiple times - should be same instance but reinitialized
-		instance1, err := services.ResolveTransient[mock.Database]()
+		instance1, err := digo.ResolveTransient[mock.Database]()
 		s.NoError(err)
 		s.True(instance1.(*mock.MockDB).IsConnected())
 
-		instance2, err := services.ResolveTransient[mock.Database]()
+		instance2, err := digo.ResolveTransient[mock.Database]()
 		s.NoError(err)
 		s.Same(instance1, instance2)
 		s.True(instance2.(*mock.MockDB).IsConnected())
@@ -127,10 +127,10 @@ func (s *HTTPTestSuite) TestSingletonScopeLifecycle() {
 	handler1 := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Bind singleton in first request
 		db := &mock.MockDB{}
-		err := services.BindSingleton[mock.Database](db)
+		err := digo.BindSingleton[mock.Database](db)
 		s.NoError(err)
 
-		instance, err := services.ResolveSingleton[mock.Database]()
+		instance, err := digo.ResolveSingleton[mock.Database]()
 		s.NoError(err)
 		globalInstance = instance
 		s.True(instance.(*mock.MockDB).IsConnected())
@@ -140,7 +140,7 @@ func (s *HTTPTestSuite) TestSingletonScopeLifecycle() {
 
 	handler2 := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Resolve singleton in second request - should be same instance
-		instance, err := services.ResolveSingleton[mock.Database]()
+		instance, err := digo.ResolveSingleton[mock.Database]()
 		s.NoError(err)
 		s.Same(globalInstance, instance)
 		s.True(instance.(*mock.MockDB).IsConnected())

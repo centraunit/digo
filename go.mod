@@ -1,4 +1,4 @@
-module github.com/centraunit/goallin_services
+module github.com/centraunit/digo
 
 go 1.23.4
 

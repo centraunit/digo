@@ -1,27 +1,27 @@
-package services_test
+package digo_test
 
 import (
 	"context"
 	"testing"
 
-	services "github.com/centraunit/goallin_services"
-	"github.com/centraunit/goallin_services/mock"
+	"github.com/centraunit/digo"
+	"github.com/centraunit/digo/mock"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestContainerSingleton(t *testing.T) {
 	t.Run("ContainerIsSingleton", func(t *testing.T) {
-		services.Shutdown(true)
+		digo.Shutdown(true)
 
 		db := &mock.MockDB{}
-		ctx := services.NewContainerContext(context.Background()).
+		ctx := digo.NewContainerContext(context.Background()).
 			WithValue("request_id", "app-singleton")
 
-		err := services.BindSingleton[mock.Database](db, ctx)
+		err := digo.BindSingleton[mock.Database](db, ctx)
 		assert.NoError(t, err)
 
-		instance1, err1 := services.ResolveSingleton[mock.Database]()
-		instance2, err2 := services.ResolveSingleton[mock.Database]()
+		instance1, err1 := digo.ResolveSingleton[mock.Database]()
+		instance2, err2 := digo.ResolveSingleton[mock.Database]()
 
 		assert.NoError(t, err1)
 		assert.NoError(t, err2)
@@ -29,17 +29,17 @@ func TestContainerSingleton(t *testing.T) {
 	})
 
 	t.Run("SingletonStateConsistency", func(t *testing.T) {
-		services.Shutdown(true)
+		digo.Shutdown(true)
 
 		service := &mock.SingletonTestService{}
-		ctx := services.NewContainerContext(context.Background()).
+		ctx := digo.NewContainerContext(context.Background()).
 			WithValue("request_id", "app-singleton")
 
-		err := services.BindSingleton[mock.Service](service, ctx)
+		err := digo.BindSingleton[mock.Service](service, ctx)
 		assert.NoError(t, err)
 
-		instance1, err1 := services.ResolveSingleton[mock.Service]()
-		instance2, err2 := services.ResolveSingleton[mock.Service]()
+		instance1, err1 := digo.ResolveSingleton[mock.Service]()
+		instance2, err2 := digo.ResolveSingleton[mock.Service]()
 
 		assert.NoError(t, err1)
 		assert.NoError(t, err2)

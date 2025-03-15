@@ -1,4 +1,4 @@
-package services
+package digo
 
 import (
 	"context"
@@ -8,7 +8,7 @@ import (
 	"sync"
 )
 
-// Package services provides a high-performance dependency injection container.
+// Package digo provides a high-performance dependency injection container.
 
 // bindingDefinition represents a service binding in the container.
 // It holds the concrete implementation, scope, and associated context.
@@ -28,7 +28,7 @@ type resolutionState struct {
 }
 
 // container manages service bindings and their lifecycle.
-// It provides thread-safe access to services and handles dependency resolution.
+// It provides thread-safe access to digo and handles dependency resolution.
 type container struct {
 	bindings        map[string]bindingDefinition
 	ctx             *ContainerContext
@@ -79,7 +79,7 @@ func GetContainer() *container {
 	return defaultContainer
 }
 
-// Boot initializes all singleton services in the container.
+// Boot initializes all singleton digo in the container.
 // It ensures each singleton is initialized exactly once and handles initialization errors.
 // Returns an error if any service fails to initialize.
 func Boot() error {
@@ -116,15 +116,15 @@ func Boot() error {
 	return bootErr
 }
 
-// Shutdown gracefully shuts down services in the container.
-// If clearSingletons is true, it also removes singleton services from the container.
+// Shutdown gracefully shuts down digo in the container.
+// If clearSingletons is true, it also removes singleton digo from the container.
 // Returns an error if any service fails to shut down properly.
 func Shutdown(clearSingletons bool) error {
 	instance := GetContainer()
 	instance.mu.Lock()
 	defer instance.mu.Unlock()
 
-	// First collect all services to shutdown
+	// First collect all digo to shutdown
 	toShutdown := make([]bindingDefinition, 0)
 
 	for _, binding := range instance.bindings {
@@ -133,7 +133,7 @@ func Shutdown(clearSingletons bool) error {
 		}
 	}
 
-	// Shutdown services
+	// Shutdown digo
 	for _, binding := range toShutdown {
 		if err := binding.concrete.OnShutdown(binding.ctx); err != nil {
 			return &ShutdownError{

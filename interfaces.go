@@ -1,8 +1,8 @@
-package services
+package digo
 
-// Package services provides interfaces for dependency injection and lifecycle management.
+// Package digo provides interfaces for dependency injection and lifecycle management.
 
-// Lifecycle defines the interface for services that require initialization and cleanup.
+// Lifecycle defines the interface for digo that require initialization and cleanup.
 type Lifecycle interface {
 	// OnBoot is called when the service is being initialized.
 	// It receives a ContainerContext for configuration access.

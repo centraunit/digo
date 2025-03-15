@@ -1,4 +1,4 @@
-package services_test
+package digo_test
 
 import (
 	"context"
@@ -7,8 +7,8 @@ import (
 	"sync"
 	"testing"
 
-	services "github.com/centraunit/goallin_services"
-	"github.com/centraunit/goallin_services/mock"
+	"github.com/centraunit/digo"
+	"github.com/centraunit/digo/mock"
 	"github.com/stretchr/testify/suite"
 )
 
@@ -17,15 +17,15 @@ type EdgeCaseTestSuite struct {
 }
 
 func (s *EdgeCaseTestSuite) SetupTest() {
-	services.Reset()
+	digo.Reset()
 
 }
 
 func (s *EdgeCaseTestSuite) TestContainerEdgeCases() {
 	s.Run("ResetDuringResolution", func() {
-		ctx := services.NewContainerContext(context.Background())
+		ctx := digo.NewContainerContext(context.Background())
 		db := &mock.MockDB{}
-		err := services.BindTransient[mock.Database](db, ctx)
+		err := digo.BindTransient[mock.Database](db, ctx)
 		s.NoError(err)
 
 		var wg sync.WaitGroup
@@ -35,7 +35,7 @@ func (s *EdgeCaseTestSuite) TestContainerEdgeCases() {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, err := services.ResolveTransient[mock.Database]()
+			_, err := digo.ResolveTransient[mock.Database]()
 			if err != nil {
 				errors <- err
 			}
@@ -45,7 +45,7 @@ func (s *EdgeCaseTestSuite) TestContainerEdgeCases() {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			services.Shutdown(true)
+			digo.Shutdown(true)
 		}()
 
 		wg.Wait()
@@ -62,35 +62,35 @@ func (s *EdgeCaseTestSuite) TestContainerEdgeCases() {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				services.Shutdown(true)
+				digo.Shutdown(true)
 			}()
 		}
 		wg.Wait()
 	})
 
 	s.Run("BootWithoutBindings", func() {
-		err := services.Boot()
+		err := digo.Boot()
 		s.NoError(err, "Boot should succeed with no bindings")
 	})
 
 	s.Run("MultipleBoots", func() {
-		err := services.Boot()
+		err := digo.Boot()
 		s.NoError(err)
-		err = services.Boot()
+		err = digo.Boot()
 		s.NoError(err, "Multiple boots should be safe")
 	})
 
 	s.Run("ShutdownWithoutBoot", func() {
-		err := services.Shutdown(false)
+		err := digo.Shutdown(false)
 		s.NoError(err, "Shutdown without boot should be safe")
 	})
 
 	s.Run("MultipleShutdowns", func() {
-		err := services.Boot()
+		err := digo.Boot()
 		s.NoError(err)
-		err = services.Shutdown(false)
+		err = digo.Shutdown(false)
 		s.NoError(err)
-		err = services.Shutdown(false)
+		err = digo.Shutdown(false)
 		s.NoError(err, "Multiple shutdowns should be safe")
 	})
 }
@@ -98,32 +98,32 @@ func (s *EdgeCaseTestSuite) TestContainerEdgeCases() {
 func (s *EdgeCaseTestSuite) TestContextEdgeCases() {
 	s.Run("NilContextInBinding", func() {
 		db := &mock.MockDB{}
-		err := services.BindTransient[mock.Database](db, nil)
+		err := digo.BindTransient[mock.Database](db, nil)
 		s.NoError(err, "Should handle nil context")
 	})
 
 	s.Run("EmptyContextValues", func() {
-		ctx := services.NewContainerContext(context.Background())
+		ctx := digo.NewContainerContext(context.Background())
 		db := &mock.MockDB{}
-		err := services.BindRequest[mock.Database](db, ctx)
+		err := digo.BindRequest[mock.Database](db, ctx)
 		s.NoError(err)
-		_, err = services.ResolveRequest[mock.Database]()
+		_, err = digo.ResolveRequest[mock.Database]()
 		s.Error(err, "Should require request_id for request scope")
 	})
 
 	s.Run("ContextWithNilValues", func() {
-		ctx := services.NewContainerContext(context.Background()).
+		ctx := digo.NewContainerContext(context.Background()).
 			WithValue("key", nil)
 		db := &mock.MockDB{}
-		err := services.BindTransient[mock.Database](db, ctx)
+		err := digo.BindTransient[mock.Database](db, ctx)
 		s.NoError(err, "Should handle nil values in context")
 	})
 
 	s.Run("ContextInheritanceWithNilParent", func() {
-		var ctx1 *services.ContainerContext = nil
-		ctx := services.NewContainerContext(ctx1)
+		var ctx1 *digo.ContainerContext = nil
+		ctx := digo.NewContainerContext(ctx1)
 		db := &mock.MockDB{}
-		err := services.BindTransient[mock.Database](db, ctx)
+		err := digo.BindTransient[mock.Database](db, ctx)
 		s.NoError(err, "Should handle nil parent context")
 	})
 }
@@ -131,11 +131,11 @@ func (s *EdgeCaseTestSuite) TestContextEdgeCases() {
 // Move InvalidDB and its methods outside the test function
 type InvalidDB struct{}
 
-func (db *InvalidDB) OnBoot(ctx *services.ContainerContext) error {
+func (db *InvalidDB) OnBoot(ctx *digo.ContainerContext) error {
 	return nil
 }
 
-func (db *InvalidDB) OnShutdown(ctx *services.ContainerContext) error {
+func (db *InvalidDB) OnShutdown(ctx *digo.ContainerContext) error {
 	return nil
 }
 
@@ -147,15 +147,15 @@ func (db *InvalidDB) Connect() error {
 
 func (s *EdgeCaseTestSuite) TestResolutionEdgeCases() {
 	s.Run("ResolveNonExistent", func() {
-		_, err := services.ResolveTransient[mock.Database]()
-		var notFoundErr *services.BindingNotFoundError
+		_, err := digo.ResolveTransient[mock.Database]()
+		var notFoundErr *digo.BindingNotFoundError
 		s.True(errors.As(err, &notFoundErr))
 	})
 
 	s.Run("ResolveDuringShutdown", func() {
-		ctx := services.NewContainerContext(context.Background())
+		ctx := digo.NewContainerContext(context.Background())
 		db := &mock.MockDB{}
-		err := services.BindTransient[mock.Database](db, ctx)
+		err := digo.BindTransient[mock.Database](db, ctx)
 		s.NoError(err)
 
 		var wg sync.WaitGroup
@@ -165,7 +165,7 @@ func (s *EdgeCaseTestSuite) TestResolutionEdgeCases() {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			err := services.Shutdown(true)
+			err := digo.Shutdown(true)
 			if err != nil {
 				errors <- err
 			}
@@ -175,7 +175,7 @@ func (s *EdgeCaseTestSuite) TestResolutionEdgeCases() {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, err := services.ResolveTransient[mock.Database]()
+			_, err := digo.ResolveTransient[mock.Database]()
 			if err != nil {
 				errors <- err
 			}
@@ -191,15 +191,15 @@ func (s *EdgeCaseTestSuite) TestResolutionEdgeCases() {
 }
 
 func (s *EdgeCaseTestSuite) TestResolveRequestEdgeCases() {
-	ctx := services.NewContainerContext(context.Background())
+	ctx := digo.NewContainerContext(context.Background())
 	db := &mock.MockDB{}
 
 	// Test resolving without request_id
-	err := services.BindRequest[mock.Database](db, ctx)
+	err := digo.BindRequest[mock.Database](db, ctx)
 	s.NoError(err)
-	_, err = services.ResolveRequest[mock.Database]()
+	_, err = digo.ResolveRequest[mock.Database]()
 	s.Error(err)
-	var missingErr *services.MissingContextValueError
+	var missingErr *digo.MissingContextValueError
 	s.True(errors.As(err, &missingErr))
 	s.Equal("request_id", missingErr.Key)
 }
@@ -207,10 +207,10 @@ func (s *EdgeCaseTestSuite) TestResolveRequestEdgeCases() {
 func (s *EdgeCaseTestSuite) TestResolveSingletonEdgeCases() {
 	// Test initialization failure
 	failingDB := &mock.FailingDB{ShouldFail: true}
-	err := services.BindSingleton[mock.Database](failingDB)
+	err := digo.BindSingleton[mock.Database](failingDB)
 	s.NoError(err)
 
-	_, err = services.ResolveSingleton[mock.Database]()
+	_, err = digo.ResolveSingleton[mock.Database]()
 	s.Error(err)
 	s.Contains(err.Error(), "simulated boot failure")
 }
