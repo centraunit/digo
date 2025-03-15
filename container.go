@@ -93,13 +93,18 @@ func Boot() error {
 			return
 		}
 
-		for _, binding := range instance.bindings {
+		// Mark container as booted first
+		instance.booted = true
+
+		for key, binding := range instance.bindings {
 			if !binding.initialized && binding.scope == ScopeSingleton {
 				if err := binding.concrete.OnBoot(binding.ctx); err != nil {
 					bootErr = err
 					break
 				}
+				// Update the binding in the map after initialization
 				binding.initialized = true
+				instance.bindings[key] = binding
 			}
 			if binding.scope == ScopeRequest {
 				err := binding.concrete.OnBoot(binding.ctx)
@@ -108,6 +113,7 @@ func Boot() error {
 					break
 				}
 				binding.initialized = true
+				instance.bindings[key] = binding
 			}
 		}
 		instance.mu.Unlock()
@@ -327,36 +333,52 @@ func ResolveSingleton[T Lifecycle]() (T, error) {
 	instance := GetContainer()
 	serviceType := reflect.TypeOf((*T)(nil)).Elem()
 	key := makeBindingKey(ScopeSingleton, serviceType)
+
+	// Get binding under read lock
 	instance.mu.RLock()
 	binding, ok := instance.bindings[key]
 	instance.mu.RUnlock()
+
 	if !ok {
 		return zero, &BindingNotFoundError{Type: serviceType.String()}
 	}
+
 	// Check for circular dependency
 	if err := instance.startResolving(key); err != nil {
 		return zero, err
 	}
 	defer instance.finishResolving(key)
 
-	// Check if already initialized
-	if binding.initialized {
+	// Check if already initialized under read lock
+	instance.mu.RLock()
+	initialized := binding.initialized
+	instance.mu.RUnlock()
+
+	if initialized {
 		if typed, ok := binding.concrete.(T); ok {
 			return typed, nil
 		}
 		return zero, &TypeMismatchError{Expected: serviceType.String(), Got: reflect.TypeOf(binding.concrete).String()}
 	}
 
-	// Initialize outside of lock
-	if err := binding.concrete.OnBoot(binding.ctx); err != nil {
-		return zero, &InitializationError{Type: serviceType.String(), Err: err}
+	// Initialize under write lock
+	instance.mu.Lock()
+	// Double-check initialization status after acquiring lock
+	if !binding.initialized {
+		if err := binding.concrete.OnBoot(binding.ctx); err != nil {
+			instance.mu.Unlock()
+			return zero, &InitializationError{Type: serviceType.String(), Err: err}
+		}
+		binding.initialized = true
+		instance.bindings[key] = binding
 	}
+	concrete := binding.concrete
+	instance.mu.Unlock()
 
-	// Update binding under lock
-	binding.initialized = true
-	instance.bindings[key] = binding
-
-	return binding.concrete.(T), nil
+	if typed, ok := concrete.(T); ok {
+		return typed, nil
+	}
+	return zero, &TypeMismatchError{Expected: serviceType.String(), Got: reflect.TypeOf(binding.concrete).String()}
 }
 
 // Reset clears all container state.
