@@ -11,23 +11,23 @@ import (
 
 func BenchmarkBinding(b *testing.B) {
 	b.Run("TransientBinding", func(b *testing.B) {
-		ctx := digo.NewContainerContext(context.Background())
+		_ = digo.NewContainerContext(context.Background())
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
 			digo.Reset()
 			db := &mock.MockDB{}
-			_ = digo.BindTransient[mock.Database](db, ctx)
+			_ = digo.ProvideTransient[mock.Database](func(_ *digo.ContainerContext) (mock.Database, error) { return db, nil })
 		}
 	})
 
 	b.Run("RequestBinding", func(b *testing.B) {
-		ctx := digo.NewContainerContext(context.Background()).
+		_ = digo.NewContainerContext(context.Background()).
 			WithValue("request_id", "bench-1")
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
 			digo.Reset()
 			db := &mock.MockDB{}
-			_ = digo.BindRequest[mock.Database](db, ctx)
+			_ = digo.ProvideRequest[mock.Database](func(_ *digo.ContainerContext) (mock.Database, error) { return db, nil })
 		}
 	})
 
@@ -43,23 +43,24 @@ func BenchmarkBinding(b *testing.B) {
 
 func BenchmarkResolution(b *testing.B) {
 	b.Run("TransientResolution", func(b *testing.B) {
-		ctx := digo.NewContainerContext(context.Background())
+		_ = digo.NewContainerContext(context.Background())
 		db := &mock.MockDB{}
-		_ = digo.BindTransient[mock.Database](db, ctx)
+		_ = digo.ProvideTransient[mock.Database](func(_ *digo.ContainerContext) (mock.Database, error) { return db, nil })
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			_, _ = digo.ResolveTransient[mock.Database]()
+			_, _ = digo.ResolveTransient[mock.Database](context.Background())
 		}
 	})
 
 	b.Run("RequestResolution", func(b *testing.B) {
-		ctx := digo.NewContainerContext(context.Background()).
-			WithValue("request_id", "bench-1")
-		db := &mock.MockDB{}
-		_ = digo.BindRequest[mock.Database](db, ctx)
+		digo.Reset()
+		_ = digo.ProvideRequest[mock.Database](func(ctx *digo.ContainerContext) (mock.Database, error) {
+			return &mock.MockDB{}, nil
+		})
+		ctx := digo.WithRequestID(context.Background(), "bench-1")
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			_, _ = digo.ResolveRequest[mock.Database]()
+			_, _ = digo.ResolveRequest[mock.Database](ctx)
 		}
 	})
 
@@ -75,33 +76,33 @@ func BenchmarkResolution(b *testing.B) {
 
 func BenchmarkComplexResolution(b *testing.B) {
 	b.Run("DeepDependencyChain", func(b *testing.B) {
-		ctx := digo.NewContainerContext(context.Background())
-		digo.BindTransient[mock.DeepService3](&mock.DeepImpl3{}, ctx)
-		digo.BindTransient[mock.DeepService2](&mock.DeepImpl2{}, ctx)
-		digo.BindTransient[mock.DeepService1](&mock.DeepImpl1{}, ctx)
+		_ = digo.NewContainerContext(context.Background())
+		digo.ProvideTransient[mock.DeepService3](func(_ *digo.ContainerContext) (mock.DeepService3, error) { return &mock.DeepImpl3{}, nil })
+		digo.ProvideTransient[mock.DeepService2](func(_ *digo.ContainerContext) (mock.DeepService2, error) { return &mock.DeepImpl2{}, nil })
+		digo.ProvideTransient[mock.DeepService1](func(_ *digo.ContainerContext) (mock.DeepService1, error) { return &mock.DeepImpl1{}, nil })
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			_, _ = digo.ResolveTransient[mock.DeepService1]()
+			_, _ = digo.ResolveTransient[mock.DeepService1](context.Background())
 		}
 	})
 
 	b.Run("ComplexServiceResolution", func(b *testing.B) {
-		ctx := digo.NewContainerContext(context.Background())
-		digo.BindTransient[mock.Database](&mock.MockDB{}, ctx)
-		digo.BindTransient[mock.Cache](&mock.MockCache{}, ctx)
-		digo.BindTransient[mock.ComplexServiceInterface](&mock.ComplexService{}, ctx)
+		_ = digo.NewContainerContext(context.Background())
+		digo.ProvideTransient[mock.Database](func(_ *digo.ContainerContext) (mock.Database, error) { return &mock.MockDB{}, nil })
+		digo.ProvideTransient[mock.Cache](func(_ *digo.ContainerContext) (mock.Cache, error) { return &mock.MockCache{}, nil })
+		digo.ProvideTransient[mock.ComplexServiceInterface](func(_ *digo.ContainerContext) (mock.ComplexServiceInterface, error) { return &mock.ComplexService{}, nil })
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			_, _ = digo.ResolveTransient[mock.ComplexServiceInterface]()
+			_, _ = digo.ResolveTransient[mock.ComplexServiceInterface](context.Background())
 		}
 	})
 }
 
 func BenchmarkConcurrentOperations(b *testing.B) {
 	b.Run("ConcurrentResolution", func(b *testing.B) {
-		ctx := digo.NewContainerContext(context.Background())
+		_ = digo.NewContainerContext(context.Background())
 		db := &mock.MockDB{}
-		_ = digo.BindTransient[mock.Database](db, ctx)
+		_ = digo.ProvideTransient[mock.Database](func(_ *digo.ContainerContext) (mock.Database, error) { return db, nil })
 		var wg sync.WaitGroup
 		b.ResetTimer()
 
@@ -110,7 +111,7 @@ func BenchmarkConcurrentOperations(b *testing.B) {
 			for j := 0; j < 5; j++ {
 				go func() {
 					defer wg.Done()
-					_, _ = digo.ResolveTransient[mock.Database]()
+					_, _ = digo.ResolveTransient[mock.Database](context.Background())
 				}()
 			}
 			wg.Wait()
@@ -118,7 +119,7 @@ func BenchmarkConcurrentOperations(b *testing.B) {
 	})
 
 	b.Run("ConcurrentMixedOperations", func(b *testing.B) {
-		ctx := digo.NewContainerContext(context.Background())
+		_ = digo.NewContainerContext(context.Background())
 		var wg sync.WaitGroup
 		b.ResetTimer()
 
@@ -128,20 +129,20 @@ func BenchmarkConcurrentOperations(b *testing.B) {
 			go func() {
 				defer wg.Done()
 				db := &mock.MockDB{}
-				_ = digo.BindTransient[mock.Database](db, ctx)
+				_ = digo.ProvideTransient[mock.Database](func(_ *digo.ContainerContext) (mock.Database, error) { return db, nil })
 			}()
 			go func() {
 				defer wg.Done()
-				_, _ = digo.ResolveTransient[mock.Database]()
+				_, _ = digo.ResolveTransient[mock.Database](context.Background())
 			}()
 			go func() {
 				defer wg.Done()
 				cache := &mock.MockCache{}
-				_ = digo.BindTransient[mock.Cache](cache, ctx)
+				_ = digo.ProvideTransient[mock.Cache](func(_ *digo.ContainerContext) (mock.Cache, error) { return cache, nil })
 			}()
 			go func() {
 				defer wg.Done()
-				_, _ = digo.ResolveTransient[mock.Cache]()
+				_, _ = digo.ResolveTransient[mock.Cache](context.Background())
 			}()
 			go func() {
 				defer wg.Done()
@@ -192,11 +193,11 @@ func BenchmarkLifecycleOperations(b *testing.B) {
 	})
 
 	b.Run("ContainerShutdown", func(b *testing.B) {
-		ctx := digo.NewContainerContext(context.Background())
+		_ = digo.NewContainerContext(context.Background())
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
 			db := &mock.MockDB{}
-			_ = digo.BindTransient[mock.Database](db, ctx)
+			_ = digo.ProvideTransient[mock.Database](func(_ *digo.ContainerContext) (mock.Database, error) { return db, nil })
 			_ = digo.Boot()
 			_ = digo.Shutdown(true)
 		}

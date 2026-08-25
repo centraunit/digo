@@ -23,25 +23,21 @@ func (s *ConcurrentTestSuite) TestConcurrentAccess() {
 	var wg sync.WaitGroup
 	errors := make(chan error, 10)
 
-	// Bind service once before starting goroutines
-	ctx := digo.NewContainerContext(context.Background())
-	db := &mock.MockDB{}
-	err := digo.BindTransient[mock.Database](db, ctx)
-	s.NoError(err)
+	s.Require().NoError(digo.ProvideTransient[mock.Database](func(ctx *digo.ContainerContext) (mock.Database, error) {
+		return &mock.MockDB{}, nil
+	}))
 
 	for i := 0; i < 5; i++ {
 		wg.Add(1)
-		go func(id int) {
+		go func() {
 			defer wg.Done()
-			// Each goroutine just resolves the service
-			instance, err := digo.ResolveTransient[mock.Database]()
+			instance, err := digo.ResolveTransient[mock.Database](context.Background())
 			if err != nil {
 				errors <- err
 				return
 			}
-			// Verify the instance is working
 			s.True(instance.(*mock.MockDB).IsConnected())
-		}(i)
+		}()
 	}
 
 	wg.Wait()
@@ -52,83 +48,52 @@ func (s *ConcurrentTestSuite) TestConcurrentAccess() {
 	}
 }
 
-func (s *ConcurrentTestSuite) TestConcurrentConditionalBindings() {
-	// Test that conditional binding gets overwritten
-	s.Run("BindingOverwrite", func() {
-		ctx := digo.NewContainerContext(context.Background()).
-			WithValue("key", "value-1").
-			WithValue("request_id", "req-1")
-		ctx2 := digo.NewContainerContext(context.Background()).
-			WithValue("key", "value-1").
-			WithValue("request_id", "req-2")
+func (s *ConcurrentTestSuite) TestProviderOverwrite() {
+	db1 := &mock.MockDB{}
+	db2 := &mock.MockDB{}
 
-		db1 := &mock.MockDB{}
-		db2 := &mock.MockDB{}
+	s.Require().NoError(digo.ProvideTransient[mock.Database](func(ctx *digo.ContainerContext) (mock.Database, error) {
+		return db1, nil
+	}))
+	s.Require().NoError(digo.ProvideTransient[mock.Database](func(ctx *digo.ContainerContext) (mock.Database, error) {
+		return db2, nil
+	}))
 
-		// Register first conditional binding
-		digo.BindTransient[mock.Database](db1, ctx, func(resolveCtx *digo.ContainerContext) (digo.Lifecycle, error) {
-			return db1, nil
-		})
+	instance, err := digo.ResolveTransient[mock.Database](context.Background())
+	s.NoError(err)
+	s.Same(db2, instance)
+}
 
-		// This should overwrite the previous binding
-		digo.BindTransient[mock.Database](db2, ctx2, func(resolveCtx *digo.ContainerContext) (digo.Lifecycle, error) {
-			return db2, nil
-		})
+func (s *ConcurrentTestSuite) TestConcurrentSameProvider() {
+	var wg sync.WaitGroup
+	errors := make(chan error, 10)
 
-		// Resolve should return db2, not db1
-		instance, err := digo.ResolveTransient[mock.Database]()
-		s.NoError(err)
-		reqId, err := instance.GetContextValue("request_id")
-		s.NoError(err)
-		s.Equal(db2.RequestID, reqId)
-	})
+	db := &mock.MockDB{}
+	s.Require().NoError(digo.ProvideTransient[mock.Database](func(ctx *digo.ContainerContext) (mock.Database, error) {
+		return db, nil
+	}))
 
-	// Test concurrent access to conditional binding
-	s.Run("ConcurrentAccess", func() {
-		var wg sync.WaitGroup
-		errors := make(chan error, 10)
-
-		ctx := digo.NewContainerContext(context.Background()).
-			WithValue("key", "test-value").
-			WithValue("request_id", "req-1")
-
-		db := &mock.MockDB{}
-
-		fmt.Println("binding db")
-		digo.BindTransient[mock.Database](db, ctx, func(resolveCtx *digo.ContainerContext) (digo.Lifecycle, error) {
-			val := resolveCtx.Value("key")
-			if val != nil && val.(string) == "test-value" {
-				return db, nil
+	for i := 0; i < 5; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			instance, err := digo.ResolveTransient[mock.Database](context.Background())
+			if err != nil {
+				errors <- err
+				return
 			}
-			return nil, fmt.Errorf("condition not met")
-		})
+			if instance != db {
+				errors <- fmt.Errorf("wrong instance returned")
+			}
+		}(i)
+	}
 
-		// Test concurrent resolutions
-		for i := 0; i < 5; i++ {
-			wg.Add(1)
-			go func(id int) {
-				defer wg.Done()
-				fmt.Printf("resolving db %d\n", id)
-				instance, err := digo.ResolveTransient[mock.Database]()
-				if err != nil {
-					errors <- err
-					return
-				}
+	wg.Wait()
+	close(errors)
 
-				if instance != db {
-					errors <- fmt.Errorf("wrong instance returned")
-				}
-			}(i)
-		}
-
-		wg.Wait()
-		close(errors)
-
-		for err := range errors {
-			s.NoError(err)
-		}
-	})
-
+	for err := range errors {
+		s.NoError(err)
+	}
 }
 
 func TestConcurrentSuite(t *testing.T) {
