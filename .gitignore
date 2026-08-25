@@ -1,0 +1,2 @@
+# Local dig comparison benches (separate module; not part of the published package)
+/bench/
