@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"reflect"
 	"sync"
+	"sync/atomic"
 )
 
 type provider struct {
@@ -16,6 +17,7 @@ type provider struct {
 type singletonState struct {
 	provider *provider
 	once     sync.Once
+	ready    atomic.Bool // true after once.Do finishes (success or failure)
 	inst     Lifecycle
 	bootErr  error
 	ctx      *ContainerContext
@@ -29,7 +31,7 @@ type managed struct {
 
 // Container is a thread-safe DI container with singleton, request, and transient scopes.
 type Container struct {
-	mu sync.Mutex
+	mu sync.RWMutex
 
 	baseCtx *ContainerContext
 
@@ -48,7 +50,15 @@ type Container struct {
 var (
 	defaultOnce sync.Once
 	defaultCtr  *Container
+
+	typeKeyCache     sync.Map // reflect.Type -> string
+	providerKeyCache sync.Map // providerCacheKey -> string
 )
+
+type providerCacheKey struct {
+	scope Scope
+	typ   reflect.Type
+}
 
 // NewContainer creates an empty container.
 func NewContainer() *Container {
@@ -69,11 +79,22 @@ func getContainer() *Container {
 }
 
 func typeKey(t reflect.Type) string {
-	return t.String()
+	if v, ok := typeKeyCache.Load(t); ok {
+		return v.(string)
+	}
+	s := t.String()
+	typeKeyCache.Store(t, s)
+	return s
 }
 
 func providerKey(scope Scope, t reflect.Type) string {
-	return string(scope) + ":" + typeKey(t)
+	k := providerCacheKey{scope: scope, typ: t}
+	if v, ok := providerKeyCache.Load(k); ok {
+		return v.(string)
+	}
+	s := string(scope) + ":" + typeKey(t)
+	providerKeyCache.Store(k, s)
+	return s
 }
 
 func isNilService(service any) bool {
@@ -180,11 +201,13 @@ func (c *Container) ProvideTransient[T Lifecycle](factory Factory[T]) error {
 }
 
 func (c *Container) resolveCtx(ctx context.Context) *ContainerContext {
-	cc := AsContainerContext(ctx)
-	c.mu.Lock()
+	c.mu.RLock()
 	base := c.baseCtx
-	c.mu.Unlock()
-	return base.MergeWith(cc)
+	c.mu.RUnlock()
+	if ctx == nil || ctx == context.Background() {
+		return base
+	}
+	return base.MergeWith(AsContainerContext(ctx))
 }
 
 func cloneStack(in map[string]struct{}) map[string]struct{} {
@@ -235,44 +258,33 @@ func (c *Container) ResolveSingleton[T Lifecycle]() (T, error) {
 	var zero T
 	t := reflect.TypeOf((*T)(nil)).Elem()
 	tk := typeKey(t)
-	pk := providerKey(ScopeSingleton, t)
 
-	c.mu.Lock()
+	c.mu.RLock()
 	st, ok := c.singletons[tk]
-	c.mu.Unlock()
+	c.mu.RUnlock()
 	if !ok || st == nil || st.provider == nil {
 		return zero, &BindingNotFoundError{Type: t.String()}
 	}
 
-	ctx, err := c.beginResolve(context.Background(), pk)
+	// Warm path: already initialized — no cycle stack, no context merge.
+	if st.ready.Load() {
+		if st.bootErr != nil {
+			return zero, st.bootErr
+		}
+		typed, ok := st.inst.(T)
+		if !ok {
+			return zero, &TypeMismatchError{Expected: t.String(), Got: reflect.TypeOf(st.inst).String()}
+		}
+		return typed, nil
+	}
+
+	inst, err := c.resolveSingletonState(st, providerKey(ScopeSingleton, t))
 	if err != nil {
 		return zero, err
 	}
-	cc := c.resolveCtx(ctx)
-	if st.ctx != nil {
-		cc = st.ctx.MergeWith(cc)
-	}
-
-	st.once.Do(func() {
-		inst, ferr := st.provider.factory(cc)
-		if ferr != nil {
-			st.bootErr = ferr
-			return
-		}
-		if err := bootInstance(inst, cc); err != nil {
-			st.bootErr = err
-			return
-		}
-		st.inst = inst
-		st.ctx = cc
-	})
-
-	if st.bootErr != nil {
-		return zero, st.bootErr
-	}
-	typed, ok := st.inst.(T)
+	typed, ok := inst.(T)
 	if !ok {
-		return zero, &TypeMismatchError{Expected: t.String(), Got: reflect.TypeOf(st.inst).String()}
+		return zero, &TypeMismatchError{Expected: t.String(), Got: reflect.TypeOf(inst).String()}
 	}
 	return typed, nil
 }
@@ -288,9 +300,9 @@ func (c *Container) ResolveTransient[T Lifecycle](ctx context.Context) (T, error
 	t := reflect.TypeOf((*T)(nil)).Elem()
 	pk := providerKey(ScopeTransient, t)
 
-	c.mu.Lock()
+	c.mu.RLock()
 	p, ok := c.providers[pk]
-	c.mu.Unlock()
+	c.mu.RUnlock()
 	if !ok || p == nil {
 		return zero, &BindingNotFoundError{Type: t.String()}
 	}
@@ -350,19 +362,20 @@ func (c *Container) ResolveRequest[T Lifecycle](ctx context.Context) (T, error) 
 		return zero, &MissingContextValueError{Key: "request_id"}
 	}
 
-	c.mu.Lock()
+	c.mu.RLock()
 	if byType, ok := c.requests[reqID]; ok {
 		if m, ok := byType[tk]; ok && m != nil {
-			c.mu.Unlock()
-			typed, ok := m.inst.(T)
+			inst := m.inst
+			c.mu.RUnlock()
+			typed, ok := inst.(T)
 			if !ok {
-				return zero, &TypeMismatchError{Expected: t.String(), Got: reflect.TypeOf(m.inst).String()}
+				return zero, &TypeMismatchError{Expected: t.String(), Got: reflect.TypeOf(inst).String()}
 			}
 			return typed, nil
 		}
 	}
 	p, ok := c.providers[pk]
-	c.mu.Unlock()
+	c.mu.RUnlock()
 	if !ok || p == nil {
 		return zero, &BindingNotFoundError{Type: t.String()}
 	}
@@ -445,12 +458,14 @@ func (c *Container) Boot() error {
 				_ = shutdownInstance(st.inst, cc)
 				st.inst = nil
 				st.bootErr = nil
+				st.ready.Store(false)
 				st.once = sync.Once{}
 			}
 		}
 		if failed != nil {
 			failed.inst = nil
 			failed.bootErr = nil
+			failed.ready.Store(false)
 			failed.once = sync.Once{}
 		}
 		return firstErr
@@ -462,6 +477,13 @@ func (c *Container) Boot() error {
 }
 
 func (c *Container) resolveSingletonState(st *singletonState, pk string) (Lifecycle, error) {
+	if st.ready.Load() {
+		if st.bootErr != nil {
+			return nil, st.bootErr
+		}
+		return st.inst, nil
+	}
+
 	ctx, err := c.beginResolve(context.Background(), pk)
 	if err != nil {
 		return nil, err
@@ -474,14 +496,17 @@ func (c *Container) resolveSingletonState(st *singletonState, pk string) (Lifecy
 		inst, ferr := st.provider.factory(cc)
 		if ferr != nil {
 			st.bootErr = ferr
+			st.ready.Store(true)
 			return
 		}
 		if err := bootInstance(inst, cc); err != nil {
 			st.bootErr = err
+			st.ready.Store(true)
 			return
 		}
 		st.inst = inst
 		st.ctx = cc
+		st.ready.Store(true)
 	})
 	if st.bootErr != nil {
 		return nil, st.bootErr

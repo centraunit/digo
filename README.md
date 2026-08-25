@@ -6,7 +6,7 @@ Small dependency injection for Go 1.27+: singleton, request, and transient scope
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 ```bash
-go get github.com/centraunit/digo@v1.0.0
+go get github.com/centraunit/digo@v1.0.1
 ```
 
 ## Performance
@@ -15,14 +15,14 @@ Measured with `go test ./services_test/ -bench=. -benchmem` on linux/amd64 (Inte
 
 | Operation | ns/op | B/op | allocs/op |
 |-----------|------:|-----:|----------:|
-| Transient bind | 1013 | 704 | 13 |
-| Request bind | 1014 | 704 | 13 |
-| Singleton bind | 1309 | 976 | 15 |
-| Transient resolve | 2071 | 1363 | 14 |
-| Request resolve (cached) | 123 | 24 | 1 |
-| Singleton resolve | 827 | 1016 | 12 |
-| Deep dependency chain | 4047 | 3563 | 40 |
-| Concurrent resolve | 22972 | 6687 | 75 |
+| Transient bind | 877 | 680 | 12 |
+| Request bind | 696 | 680 | 12 |
+| Singleton bind | 1064 | 952 | 14 |
+| Transient resolve | 1664 | 1340 | 13 |
+| Request resolve (cached) | 113 | 0 | 0 |
+| Singleton resolve (warm) | 46 | 0 | 0 |
+| Deep dependency chain | 4264 | 3456 | 37 |
+| Concurrent resolve | 19734 | 6970 | 70 |
 
 ## Usage
 

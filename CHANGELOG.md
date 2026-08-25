@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.0.1
+
+- Warm singleton resolve skips cycle-stack / context merge (~46 ns/op, 0 allocs)
+- `RWMutex` for provider lookups; cached type / provider keys
+
 ## v1.0.0
 
 Requires Go 1.27.
