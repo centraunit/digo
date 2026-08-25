@@ -9,6 +9,21 @@ Small dependency injection for Go 1.27+: singleton, request, and transient scope
 go get github.com/centraunit/digo@v1.0.0
 ```
 
+## Performance
+
+Measured with `go test ./services_test/ -bench=. -benchmem` on linux/amd64 (Intel i5-8600). Re-run locally; numbers move with hardware and Go version.
+
+| Operation | ns/op | B/op | allocs/op |
+|-----------|------:|-----:|----------:|
+| Transient bind | 1013 | 704 | 13 |
+| Request bind | 1014 | 704 | 13 |
+| Singleton bind | 1309 | 976 | 15 |
+| Transient resolve | 2071 | 1363 | 14 |
+| Request resolve (cached) | 123 | 24 | 1 |
+| Singleton resolve | 827 | 1016 | 12 |
+| Deep dependency chain | 4047 | 3563 | 40 |
+| Concurrent resolve | 22972 | 6687 | 75 |
+
 ## Usage
 
 ```go
