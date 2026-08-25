@@ -1,5 +1,9 @@
 # Changelog
 
+## v1.0.3
+
+- README example shows singleton → request dependency, transient uniqueness, and useful output
+
 ## v1.0.2
 
 - Fix README example: drop unused `context` import; print `ok` instead of `Ping()`'s nil error
