@@ -1,5 +1,9 @@
 # Changelog
 
+## v1.0.2
+
+- Fix README example: drop unused `context` import; print `ok` instead of `Ping()`'s nil error
+
 ## v1.0.1
 
 - Warm singleton resolve skips cycle-stack / context merge (~46 ns/op, 0 allocs)
