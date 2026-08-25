@@ -6,7 +6,7 @@ Small dependency injection for Go 1.27+: singleton, request, and transient scope
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 ```bash
-go get github.com/centraunit/digo@v1.0.1
+go get github.com/centraunit/digo@v1.0.2
 ```
 
 ## Performance
@@ -30,7 +30,6 @@ Measured with `go test ./services_test/ -bench=. -benchmem` on linux/amd64 (Inte
 package main
 
 import (
-	"context"
 	"fmt"
 	"log"
 	"net/http"
@@ -75,7 +74,11 @@ func main() {
 			http.Error(w, err.Error(), 500)
 			return
 		}
-		fmt.Fprintln(w, db.Ping())
+		if err := db.Ping(); err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		fmt.Fprintln(w, "ok")
 	})
 	log.Fatal(http.ListenAndServe(":8080", nil))
 }
