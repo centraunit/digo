@@ -2,6 +2,8 @@ package digo_test
 
 import (
 	"context"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/centraunit/digo"
@@ -15,124 +17,130 @@ type ResourceTestSuite struct {
 
 func (s *ResourceTestSuite) SetupTest() {
 	digo.Reset()
-
 }
 
 func (s *ResourceTestSuite) TestTransientScope() {
-	ctx := digo.NewContainerContext(context.Background())
-	db := &mock.MockDB{}
-	err := digo.BindTransient[mock.Database](db, ctx)
-	s.NoError(err)
+	s.Require().NoError(digo.ProvideTransient[mock.Database](func(ctx *digo.ContainerContext) (mock.Database, error) {
+		return &mock.MockDB{}, nil
+	}))
 
-	instance1, err := digo.ResolveTransient[mock.Database]()
+	instance1, err := digo.ResolveTransient[mock.Database](context.Background())
 	s.NoError(err)
-	instance2, err := digo.ResolveTransient[mock.Database]()
+	instance2, err := digo.ResolveTransient[mock.Database](context.Background())
 	s.NoError(err)
-	s.Same(instance1, instance2)
+	s.NotSame(instance1, instance2)
+	s.True(instance1.(*mock.MockDB).IsConnected())
 	s.True(instance2.(*mock.MockDB).IsConnected())
 }
 
 func (s *ResourceTestSuite) TestRequestScope() {
-	db := &mock.MockDB{}
-	ctx := digo.NewContainerContext(context.Background()).WithValue("request_id", "req-1")
+	s.Require().NoError(digo.ProvideRequest[mock.Database](func(ctx *digo.ContainerContext) (mock.Database, error) {
+		return &mock.MockDB{}, nil
+	}))
 
-	err := digo.BindRequest[mock.Database](db, ctx)
+	ctx1 := digo.WithRequestID(context.Background(), "req-1")
+	instance1, err := digo.ResolveRequest[mock.Database](ctx1)
 	s.NoError(err)
+	s.True(instance1.(*mock.MockDB).IsConnected())
 
-	instance1, err := digo.ResolveRequest[mock.Database]()
-	s.NoError(err)
-	s.True(instance1.(*mock.MockDB).IsConnected(), "OnBoot should be called")
-
-	instance2, err := digo.ResolveRequest[mock.Database]()
+	instance2, err := digo.ResolveRequest[mock.Database](ctx1)
 	s.NoError(err)
 	s.Same(instance1, instance2)
 
-	ctx2 := digo.NewContainerContext(context.Background()).WithValue("request_id", "req-2")
-	db2 := &mock.MockDB{}
-	err = digo.BindRequest[mock.Database](db2, ctx2)
-	s.NoError(err)
-
-	instance3, err := digo.ResolveRequest[mock.Database]()
+	ctx2 := digo.WithRequestID(context.Background(), "req-2")
+	instance3, err := digo.ResolveRequest[mock.Database](ctx2)
 	s.NoError(err)
 	s.NotSame(instance1, instance3)
 	s.True(instance3.(*mock.MockDB).IsConnected())
 }
 
+func (s *ResourceTestSuite) TestConcurrentSingletonBootOnce() {
+	var boots atomic.Int64
+	s.Require().NoError(digo.ProvideSingleton[mock.Database](func(ctx *digo.ContainerContext) (mock.Database, error) {
+		boots.Add(1)
+		return &mock.MockDB{}, nil
+	}))
+
+	var wg sync.WaitGroup
+	const n = 32
+	instances := make([]mock.Database, n)
+	wg.Add(n)
+	for i := 0; i < n; i++ {
+		go func(i int) {
+			defer wg.Done()
+			inst, err := digo.ResolveSingleton[mock.Database]()
+			s.NoError(err)
+			instances[i] = inst
+		}(i)
+	}
+	wg.Wait()
+	s.Equal(int64(1), boots.Load())
+	for i := 1; i < n; i++ {
+		s.Same(instances[0], instances[i])
+	}
+}
+
 func (s *ResourceTestSuite) TestMemoryCleanup() {
-	db := &mock.MockDB{}
-	ctx := digo.NewContainerContext(context.Background()).WithValue("request_id", "req-1")
+	s.Require().NoError(digo.ProvideRequest[mock.Database](func(ctx *digo.ContainerContext) (mock.Database, error) {
+		return &mock.MockDB{}, nil
+	}))
 
-	err := digo.BindRequest[mock.Database](db, ctx)
-	s.NoError(err)
-
-	instance, err := digo.ResolveRequest[mock.Database]()
+	ctx := digo.WithRequestID(context.Background(), "req-1")
+	instance, err := digo.ResolveRequest[mock.Database](ctx)
 	s.NoError(err)
 	s.NotNil(instance)
 
 	digo.Shutdown(true)
 
-	_, err = digo.ResolveRequest[mock.Database]()
-	s.Error(err, "Should not be able to resolve after Reset")
+	_, err = digo.ResolveRequest[mock.Database](ctx)
+	s.Error(err)
 }
 
 func (s *ResourceTestSuite) TestLifecycleCleanup() {
-	// Test regular shutdown (keeping singletons)
 	s.Run("RegularShutdown", func() {
-		// Create a singleton service
 		singletonDB := &mock.MockDB{}
-
-		singletonCtx := digo.NewContainerContext(context.Background()).
-			WithValue("request_id", "singleton-test")
-		err := digo.BindSingleton[mock.Database](singletonDB, singletonCtx)
+		err := digo.BindSingleton[mock.Database](singletonDB)
 		s.NoError(err)
 
-		// Create a request-scoped service
-		requestDB := &mock.MockDB{}
-		requestCtx := digo.NewContainerContext(context.Background()).
-			WithValue("request_id", "request-test")
-		err = digo.BindRequest[mock.Database](requestDB, requestCtx)
-		s.NoError(err)
+		s.Require().NoError(digo.ProvideRequest[mock.Database](func(ctx *digo.ContainerContext) (mock.Database, error) {
+			return &mock.MockDB{}, nil
+		}))
 
-		// Boot both digo
 		err = digo.Boot()
 		s.NoError(err)
 
-		// Verify singleton is initialized
 		instance, err := digo.ResolveSingleton[mock.Database]()
 		s.NoError(err)
 		s.Same(singletonDB, instance)
 		s.True(instance.(*mock.MockDB).IsConnected())
 
-		// Regular shutdown - should keep singletons
+		reqCtx := digo.WithRequestID(context.Background(), "request-test")
+		_, err = digo.ResolveRequest[mock.Database](reqCtx)
+		s.NoError(err)
+
 		err = digo.Shutdown(false)
 		s.NoError(err)
 
-		// Should still be able to resolve singleton
 		instance, err = digo.ResolveSingleton[mock.Database]()
-		s.NoError(err, "Singleton should still be resolvable after regular shutdown")
-		s.Same(singletonDB, instance, "Should get the same singleton instance")
-		s.True(instance.(*mock.MockDB).IsConnected(), "Singleton should still be initialized")
+		s.NoError(err)
+		s.Same(singletonDB, instance)
+		s.True(instance.(*mock.MockDB).IsConnected())
 	})
 
-	// Test complete shutdown (clearing everything)
 	s.Run("CompleteShutdown", func() {
-		// Create a singleton service
+		digo.Reset()
 		singletonDB := &mock.MockDB{}
-		singletonCtx := digo.NewContainerContext(context.Background()).
-			WithValue("request_id", "singleton-test")
-		err := digo.BindSingleton[mock.Database](singletonDB, singletonCtx)
+		err := digo.BindSingleton[mock.Database](singletonDB)
 		s.NoError(err)
 
 		err = digo.Boot()
 		s.NoError(err)
 
-		// Complete shutdown - should clear everything
 		err = digo.Shutdown(true)
 		s.NoError(err)
 
-		// Should not be able to resolve anything
 		_, err = digo.ResolveSingleton[mock.Database]()
-		s.Error(err, "Nothing should be resolvable after complete shutdown")
+		s.Error(err)
 	})
 }
 

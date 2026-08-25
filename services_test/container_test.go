@@ -20,18 +20,18 @@ func (s *ContainerTestSuite) SetupTest() {
 }
 
 func (s *ContainerTestSuite) TestBasicInitialization() {
-	ctx := digo.NewContainerContext(context.Background())
-	digo.BindTransient[mock.Database](&mock.MockDB{}, ctx)
-	digo.BindTransient[mock.Cache](&mock.MockCache{}, ctx)
+	_ = digo.NewContainerContext(context.Background())
+	digo.ProvideTransient[mock.Database](func(_ *digo.ContainerContext) (mock.Database, error) { return &mock.MockDB{}, nil })
+	digo.ProvideTransient[mock.Cache](func(_ *digo.ContainerContext) (mock.Cache, error) { return &mock.MockCache{}, nil })
 
-	db, err := digo.ResolveTransient[mock.Database]()
+	db, err := digo.ResolveTransient[mock.Database](context.Background())
 	s.NoError(err)
 	s.NotNil(db)
 	s.True(db.(*mock.MockDB).IsConnected(), "Database should be connected")
 }
 
 func (s *ContainerTestSuite) TestNestedDependencies() {
-	ctx := digo.NewContainerContext(context.Background()).
+	_ = digo.NewContainerContext(context.Background()).
 		WithValue("request_id", "nested-test")
 
 	// All digo should be bound with the same scope
@@ -39,25 +39,25 @@ func (s *ContainerTestSuite) TestNestedDependencies() {
 	svc2 := &mock.DeepImpl2{}
 	svc1 := &mock.DeepImpl1{}
 
-	err := digo.BindTransient[mock.DeepService3](svc3, ctx)
+	err := digo.ProvideTransient[mock.DeepService3](func(_ *digo.ContainerContext) (mock.DeepService3, error) { return svc3, nil })
 	s.NoError(err)
-	err = digo.BindTransient[mock.DeepService2](svc2, ctx)
+	err = digo.ProvideTransient[mock.DeepService2](func(_ *digo.ContainerContext) (mock.DeepService2, error) { return svc2, nil })
 	s.NoError(err)
-	err = digo.BindTransient[mock.DeepService1](svc1, ctx)
+	err = digo.ProvideTransient[mock.DeepService1](func(_ *digo.ContainerContext) (mock.DeepService1, error) { return svc1, nil })
 	s.NoError(err)
 
-	resolved, err := digo.ResolveTransient[mock.DeepService1]()
+	resolved, err := digo.ResolveTransient[mock.DeepService1](context.Background())
 	s.NoError(err)
 	s.Equal("deep", resolved.GetService2().GetService3().GetValue())
 }
 
 func (s *ContainerTestSuite) TestComplexDependencyResolution() {
-	ctx := digo.NewContainerContext(context.Background())
-	digo.BindTransient[mock.Database](&mock.MockDB{}, ctx)
-	digo.BindTransient[mock.Cache](&mock.MockCache{}, ctx)
-	digo.BindTransient[mock.ComplexServiceInterface](&mock.ComplexService{}, ctx)
+	_ = digo.NewContainerContext(context.Background())
+	digo.ProvideTransient[mock.Database](func(_ *digo.ContainerContext) (mock.Database, error) { return &mock.MockDB{}, nil })
+	digo.ProvideTransient[mock.Cache](func(_ *digo.ContainerContext) (mock.Cache, error) { return &mock.MockCache{}, nil })
+	digo.ProvideTransient[mock.ComplexServiceInterface](func(_ *digo.ContainerContext) (mock.ComplexServiceInterface, error) { return &mock.ComplexService{}, nil })
 
-	service, err := digo.ResolveTransient[mock.ComplexServiceInterface]()
+	service, err := digo.ResolveTransient[mock.ComplexServiceInterface](context.Background())
 	s.NoError(err)
 
 	complex := service.(*mock.ComplexService)
@@ -67,12 +67,12 @@ func (s *ContainerTestSuite) TestComplexDependencyResolution() {
 
 func (s *ContainerTestSuite) TestDeepDependencyResolution() {
 	s.Run("DeepResolution", func() {
-		ctx := digo.NewContainerContext(context.Background())
-		digo.BindTransient[mock.DeepService3](&mock.DeepImpl3{Value: "deep"}, ctx)
-		digo.BindTransient[mock.DeepService2](&mock.DeepImpl2{}, ctx)
-		digo.BindTransient[mock.DeepService1](&mock.DeepImpl1{}, ctx)
+		_ = digo.NewContainerContext(context.Background())
+		digo.ProvideTransient[mock.DeepService3](func(_ *digo.ContainerContext) (mock.DeepService3, error) { return &mock.DeepImpl3{Value: "deep"}, nil })
+		digo.ProvideTransient[mock.DeepService2](func(_ *digo.ContainerContext) (mock.DeepService2, error) { return &mock.DeepImpl2{}, nil })
+		digo.ProvideTransient[mock.DeepService1](func(_ *digo.ContainerContext) (mock.DeepService1, error) { return &mock.DeepImpl1{}, nil })
 
-		svc1, err := digo.ResolveTransient[mock.DeepService1]()
+		svc1, err := digo.ResolveTransient[mock.DeepService1](context.Background())
 		s.NoError(err)
 		s.NotNil(svc1)
 		s.NotNil(svc1.GetService2())
@@ -82,12 +82,12 @@ func (s *ContainerTestSuite) TestDeepDependencyResolution() {
 
 	s.Run("PartialResolutionFailure", func() {
 		digo.Reset()
-		ctx := digo.NewContainerContext(context.Background())
+		_ = digo.NewContainerContext(context.Background())
 
-		digo.BindTransient[mock.DeepService1](&mock.DeepImpl1{}, ctx)
-		digo.BindTransient[mock.DeepService2](&mock.DeepImpl2{}, ctx)
+		digo.ProvideTransient[mock.DeepService1](func(_ *digo.ContainerContext) (mock.DeepService1, error) { return &mock.DeepImpl1{}, nil })
+		digo.ProvideTransient[mock.DeepService2](func(_ *digo.ContainerContext) (mock.DeepService2, error) { return &mock.DeepImpl2{}, nil })
 
-		_, err := digo.ResolveTransient[mock.DeepService1]()
+		_, err := digo.ResolveTransient[mock.DeepService1](context.Background())
 		var initErr *digo.InitializationError
 		s.True(errors.As(err, &initErr))
 	})

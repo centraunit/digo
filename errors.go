@@ -2,114 +2,72 @@ package digo
 
 import "fmt"
 
-// CircularDependencyError represents a circular dependency detection error.
+// CircularDependencyError is returned when a resolve chain re-enters the same binding.
 type CircularDependencyError struct {
 	Type string
 }
 
 func (e *CircularDependencyError) Error() string {
-	return fmt.Sprintf("circular dependency detected for type: %s", e.Type)
+	return fmt.Sprintf("digo: circular dependency: %s", e.Type)
 }
 
-// BindingNotFoundError represents a missing binding error.
+// BindingNotFoundError is returned when no provider is registered.
 type BindingNotFoundError struct {
 	Type string
 }
 
 func (e *BindingNotFoundError) Error() string {
-	return fmt.Sprintf("no binding found for type: %s", e.Type)
+	return fmt.Sprintf("digo: no binding for %s", e.Type)
 }
 
-// NilServiceError represents an attempt to bind a nil service.
+// NilServiceError is returned when binding a nil instance.
 type NilServiceError struct {
 	Type string
 }
 
 func (e *NilServiceError) Error() string {
-	return fmt.Sprintf("nil service provided for type: %s", e.Type)
+	return fmt.Sprintf("digo: nil service for %s", e.Type)
 }
 
-// InitializationError represents a service initialization failure.
+// InitializationError wraps OnBoot failures.
 type InitializationError struct {
 	Type string
 	Err  error
 }
 
 func (e *InitializationError) Error() string {
-	return fmt.Sprintf("initialization failed for type %s: %v", e.Type, e.Err)
+	return fmt.Sprintf("digo: OnBoot %s: %v", e.Type, e.Err)
 }
 
-func (e *InitializationError) Unwrap() error {
-	return e.Err
-}
+func (e *InitializationError) Unwrap() error { return e.Err }
 
-// MissingContextValueError represents a missing required context value.
+// MissingContextValueError is returned when a required context value is absent.
 type MissingContextValueError struct {
 	Key string
 }
 
 func (e *MissingContextValueError) Error() string {
-	return fmt.Sprintf("required context value not found: %s", e.Key)
+	return fmt.Sprintf("digo: missing %s in context", e.Key)
 }
 
-// TypeMismatchError represents a type assertion failure.
+// TypeMismatchError is returned when a factory yields the wrong type.
 type TypeMismatchError struct {
 	Expected string
 	Got      string
 }
 
 func (e *TypeMismatchError) Error() string {
-	return fmt.Sprintf("type mismatch: expected %s, got %s", e.Expected, e.Got)
+	return fmt.Sprintf("digo: type mismatch: want %s, got %s", e.Expected, e.Got)
 }
 
-// ShutdownError represents a service shutdown failure.
+// ShutdownError wraps OnShutdown failures.
 type ShutdownError struct {
 	Type string
 	Err  error
 }
 
 func (e *ShutdownError) Error() string {
-	return fmt.Sprintf("shutdown failed for type %s: %v", e.Type, e.Err)
+	return fmt.Sprintf("digo: OnShutdown %s: %v", e.Type, e.Err)
 }
 
-func (e *ShutdownError) Unwrap() error {
-	return e.Err
-}
-
-// PredicateError represents a predicate evaluation failure.
-type PredicateError struct {
-	Type string
-	Err  error
-}
-
-func (e *PredicateError) Error() string {
-	return fmt.Sprintf("predicate evaluation failed for type %s: %v", e.Type, e.Err)
-}
-
-func (e *PredicateError) Unwrap() error {
-	return e.Err
-}
-
-// BootError represents a service boot failure.
-type BootError struct {
-	Type string
-	Err  error
-}
-
-func (e *BootError) Error() string {
-	return fmt.Sprintf("boot failed for type %s: %v", e.Type, e.Err)
-}
-
-func (e *BootError) Unwrap() error {
-	return e.Err
-}
-
-// InvalidScopeError represents an invalid scope usage.
-type InvalidScopeError struct {
-	Type  string
-	Scope string
-}
-
-func (e *InvalidScopeError) Error() string {
-	return fmt.Sprintf("invalid scope %s for type %s", e.Scope, e.Type)
-}
+func (e *ShutdownError) Unwrap() error { return e.Err }

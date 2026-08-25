@@ -3,7 +3,6 @@ package digo_test
 import (
 	"context"
 	"errors"
-	"fmt"
 	"testing"
 
 	"github.com/centraunit/digo"
@@ -16,27 +15,19 @@ type ContextTestSuite struct {
 }
 
 func (s *ContextTestSuite) SetupTest() {
-	digo.Shutdown(true)
+	digo.Reset()
 }
 
 func (s *ContextTestSuite) TestContextInheritance() {
 	s.Run("ValueOverriding", func() {
-		// Create a DB with global context value
-		globalCtx := digo.NewContainerContext(context.Background()).
-			WithValue("shared", "base-value").
-			WithValue("request_id", "req-1")
-		db1 := &mock.MockDB{}
-		digo.BindRequest[mock.Database](db1, globalCtx)
+		s.Require().NoError(digo.ProvideRequest[mock.Database](func(ctx *digo.ContainerContext) (mock.Database, error) {
+			return &mock.MockDB{}, nil
+		}))
 
-		// Create a DB with local context that overrides global value
-		localCtx := digo.NewContainerContext(context.Background()).
-			WithValue("shared", "override-value").
-			WithValue("request_id", "req-2")
-		db2 := &mock.MockDB{}
-		digo.BindRequest[mock.Database](db2, localCtx)
+		ctx := digo.AsContainerContext(digo.WithRequestID(context.Background(), "req-2")).
+			WithValue("shared", "override-value")
 
-		// Verify context values are preserved during OnBoot
-		instance, err := digo.ResolveRequest[mock.Database]()
+		instance, err := digo.ResolveRequest[mock.Database](ctx)
 		s.NoError(err)
 		s.NotNil(instance)
 		val, err := instance.(*mock.MockDB).GetContextValue("shared")
@@ -44,22 +35,17 @@ func (s *ContextTestSuite) TestContextInheritance() {
 		s.Equal("override-value", val)
 	})
 
-	s.Run("ConditionalBindingWithContext", func() {
-		ctx := digo.NewContainerContext(context.Background()).
-			WithValue("env", "prod").
-			WithValue("request_id", "req-1")
-
-		prodDB := &mock.MockDB{}
-
-		digo.BindTransient[mock.Database](prodDB, ctx, func(resolveCtx *digo.ContainerContext) (digo.Lifecycle, error) {
-			val := resolveCtx.Value("env")
+	s.Run("FactorySeesResolveContext", func() {
+		s.Require().NoError(digo.ProvideTransient[mock.Database](func(ctx *digo.ContainerContext) (mock.Database, error) {
+			val := ctx.Value("env")
 			if val != nil && val.(string) == "prod" {
-				return prodDB, nil
+				return &mock.MockDB{}, nil
 			}
-			return nil, fmt.Errorf("condition not met")
-		})
+			return nil, errors.New("condition not met")
+		}))
 
-		instance, err := digo.ResolveTransient[mock.Database]()
+		ctx := digo.NewContainerContext(context.Background()).WithValue("env", "prod")
+		instance, err := digo.ResolveTransient[mock.Database](ctx)
 		s.NoError(err)
 		s.NotNil(instance)
 		val, err := instance.(*mock.MockDB).GetContextValue("env")
@@ -68,10 +54,10 @@ func (s *ContextTestSuite) TestContextInheritance() {
 	})
 
 	s.Run("MissingRequestID", func() {
-		ctx := digo.NewContainerContext(context.Background())
-		db := &mock.MockDB{}
-		digo.BindRequest[mock.Database](db, ctx)
-		_, err := digo.ResolveRequest[mock.Database]()
+		s.Require().NoError(digo.ProvideRequest[mock.Database](func(ctx *digo.ContainerContext) (mock.Database, error) {
+			return &mock.MockDB{}, nil
+		}))
+		_, err := digo.ResolveRequest[mock.Database](context.Background())
 		s.Error(err)
 		var missingErr *digo.MissingContextValueError
 		s.True(errors.As(err, &missingErr))
@@ -79,10 +65,10 @@ func (s *ContextTestSuite) TestContextInheritance() {
 	})
 }
 
-func (s *ContextTestSuite) TestParent() {
+func (s *ContextTestSuite) TestEmbeddedContext() {
 	parentCtx := context.Background()
 	ctx := digo.NewContainerContext(parentCtx)
-	s.Equal(parentCtx, ctx.Parent(), "Parent context should be preserved")
+	s.Equal(parentCtx, ctx.Context)
 }
 
 func (s *ContextTestSuite) TestMergeWith() {
@@ -99,7 +85,6 @@ func (s *ContextTestSuite) TestMergeWith() {
 	s.Equal("value2", ctx2.Value("key2"))
 	s.Equal("value2", merged.Value("shared"), "Later context should override shared keys")
 
-	// Test merge with nil
 	merged = ctx1.MergeWith(nil)
 	s.Equal("value1", merged.Value("key1"))
 }

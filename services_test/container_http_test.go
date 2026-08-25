@@ -3,6 +3,8 @@ package digo_test
 import (
 	"net/http"
 	"net/http/httptest"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/centraunit/digo"
@@ -18,56 +20,42 @@ func (s *HTTPTestSuite) SetupTest() {
 	digo.Reset()
 }
 
-// Middleware to handle container lifecycle
-func containerMiddleware(next http.Handler) http.Handler {
+func requestMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Create request context with unique ID
-		ctx := digo.NewContainerContext(r.Context()).
-			WithValue("request_id", r.Header.Get("X-Request-ID"))
-
-		// Boot container before request
-		if err := digo.Boot(); err != nil {
-			http.Error(w, "Container boot failed", http.StatusInternalServerError)
+		parent := r.Context()
+		if id := r.Header.Get("X-Request-ID"); id != "" {
+			parent = digo.WithRequestID(parent, id)
+		}
+		ctx, end, err := digo.RequestScope(parent)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-
-		// Call next handler
+		defer func() { _ = end() }()
 		next.ServeHTTP(w, r.WithContext(ctx))
-
-		// Shutdown after request (keep singletons)
-		if err := digo.Shutdown(false); err != nil {
-			http.Error(w, "Container shutdown failed", http.StatusInternalServerError)
-			return
-		}
 	})
 }
 
 func (s *HTTPTestSuite) TestRequestScopeLifecycle() {
-	// Create handlers that use different scopes
-	handler1 := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Bind and resolve request-scoped service
-		db := &mock.MockDB{}
-		err := digo.BindRequest[mock.Database](db, r.Context().(*digo.ContainerContext))
-		s.NoError(err)
+	s.Require().NoError(digo.ProvideRequest[mock.Database](func(ctx *digo.ContainerContext) (mock.Database, error) {
+		return &mock.MockDB{}, nil
+	}))
 
-		instance, err := digo.ResolveRequest[mock.Database]()
+	handler1 := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		instance, err := digo.ResolveRequest[mock.Database](r.Context())
 		s.NoError(err)
 		s.True(instance.(*mock.MockDB).IsConnected())
-
 		w.WriteHeader(http.StatusOK)
 	})
 
 	handler2 := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Try to resolve the same request-scoped service (should be different instance)
-		instance, err := digo.ResolveRequest[mock.Database]()
-		s.Error(err) // Should fail as it's a new request
-		s.Nil(instance)
-
+		instance, err := digo.ResolveRequest[mock.Database](r.Context())
+		s.NoError(err)
+		s.True(instance.(*mock.MockDB).IsConnected())
 		w.WriteHeader(http.StatusOK)
 	})
 
-	// Create test server with middleware
-	server := httptest.NewServer(containerMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(requestMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/handler1" {
 			handler1.ServeHTTP(w, r)
 		} else {
@@ -76,14 +64,12 @@ func (s *HTTPTestSuite) TestRequestScopeLifecycle() {
 	})))
 	defer server.Close()
 
-	// Make first request
 	req1, _ := http.NewRequest("GET", server.URL+"/handler1", nil)
 	req1.Header.Set("X-Request-ID", "req-1")
 	resp1, err := http.DefaultClient.Do(req1)
 	s.NoError(err)
 	s.Equal(http.StatusOK, resp1.StatusCode)
 
-	// Make second request
 	req2, _ := http.NewRequest("GET", server.URL+"/handler2", nil)
 	req2.Header.Set("X-Request-ID", "req-2")
 	resp2, err := http.DefaultClient.Do(req2)
@@ -91,27 +77,95 @@ func (s *HTTPTestSuite) TestRequestScopeLifecycle() {
 	s.Equal(http.StatusOK, resp2.StatusCode)
 }
 
-func (s *HTTPTestSuite) TestTransientScopeLifecycle() {
-	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Bind transient service
-		db := &mock.MockDB{}
-		err := digo.BindTransient[mock.Database](db, r.Context().(*digo.ContainerContext))
-		s.NoError(err)
+func (s *HTTPTestSuite) TestConcurrentRequestIsolation() {
+	var boots atomic.Int64
+	s.Require().NoError(digo.ProvideRequest[mock.Database](func(ctx *digo.ContainerContext) (mock.Database, error) {
+		boots.Add(1)
+		return &mock.MockDB{}, nil
+	}))
 
-		// Resolve multiple times - should be same instance but reinitialized
-		instance1, err := digo.ResolveTransient[mock.Database]()
+	var (
+		mu    sync.Mutex
+		seen  = map[string]mock.Database{}
+		start = make(chan struct{})
+		wg    sync.WaitGroup
+	)
+
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-start
+		inst, err := digo.ResolveRequest[mock.Database](r.Context())
+		s.NoError(err)
+		id, ok := digo.RequestID(r.Context())
+		s.True(ok)
+		mu.Lock()
+		seen[id] = inst
+		mu.Unlock()
+		// hold instance briefly while peer requests also resolve
+		inst2, err := digo.ResolveRequest[mock.Database](r.Context())
+		s.NoError(err)
+		s.Same(inst, inst2)
+		w.WriteHeader(http.StatusOK)
+	})
+
+	server := httptest.NewServer(requestMiddleware(handler))
+	defer server.Close()
+
+	const n = 8
+	wg.Add(n)
+	errs := make(chan error, n)
+	for i := 0; i < n; i++ {
+		go func(i int) {
+			defer wg.Done()
+			req, _ := http.NewRequest("GET", server.URL, nil)
+			req.Header.Set("X-Request-ID", "req-"+string(rune('a'+i)))
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				errs <- err
+				return
+			}
+			resp.Body.Close()
+			if resp.StatusCode != http.StatusOK {
+				errs <- err
+			}
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		s.NoError(err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	s.Equal(n, len(seen))
+	s.Equal(int64(n), boots.Load())
+	ptrs := map[mock.Database]struct{}{}
+	for _, inst := range seen {
+		ptrs[inst] = struct{}{}
+	}
+	s.Equal(n, len(ptrs), "each request must get its own instance")
+}
+
+func (s *HTTPTestSuite) TestTransientScopeLifecycle() {
+	s.Require().NoError(digo.ProvideTransient[mock.Database](func(ctx *digo.ContainerContext) (mock.Database, error) {
+		return &mock.MockDB{}, nil
+	}))
+
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		instance1, err := digo.ResolveTransient[mock.Database](r.Context())
 		s.NoError(err)
 		s.True(instance1.(*mock.MockDB).IsConnected())
 
-		instance2, err := digo.ResolveTransient[mock.Database]()
+		instance2, err := digo.ResolveTransient[mock.Database](r.Context())
 		s.NoError(err)
-		s.Same(instance1, instance2)
+		s.NotSame(instance1, instance2)
 		s.True(instance2.(*mock.MockDB).IsConnected())
 
 		w.WriteHeader(http.StatusOK)
 	})
 
-	server := httptest.NewServer(containerMiddleware(handler))
+	server := httptest.NewServer(requestMiddleware(handler))
 	defer server.Close()
 
 	req, _ := http.NewRequest("GET", server.URL, nil)
@@ -124,31 +178,27 @@ func (s *HTTPTestSuite) TestTransientScopeLifecycle() {
 func (s *HTTPTestSuite) TestSingletonScopeLifecycle() {
 	var globalInstance mock.Database
 
-	handler1 := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Bind singleton in first request
-		db := &mock.MockDB{}
-		err := digo.BindSingleton[mock.Database](db)
-		s.NoError(err)
+	s.Require().NoError(digo.ProvideSingleton[mock.Database](func(ctx *digo.ContainerContext) (mock.Database, error) {
+		return &mock.MockDB{}, nil
+	}))
 
+	handler1 := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		instance, err := digo.ResolveSingleton[mock.Database]()
 		s.NoError(err)
 		globalInstance = instance
 		s.True(instance.(*mock.MockDB).IsConnected())
-
 		w.WriteHeader(http.StatusOK)
 	})
 
 	handler2 := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Resolve singleton in second request - should be same instance
 		instance, err := digo.ResolveSingleton[mock.Database]()
 		s.NoError(err)
 		s.Same(globalInstance, instance)
 		s.True(instance.(*mock.MockDB).IsConnected())
-
 		w.WriteHeader(http.StatusOK)
 	})
 
-	server := httptest.NewServer(containerMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(requestMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/handler1" {
 			handler1.ServeHTTP(w, r)
 		} else {
@@ -157,14 +207,12 @@ func (s *HTTPTestSuite) TestSingletonScopeLifecycle() {
 	})))
 	defer server.Close()
 
-	// First request binds singleton
 	req1, _ := http.NewRequest("GET", server.URL+"/handler1", nil)
 	req1.Header.Set("X-Request-ID", "req-1")
 	resp1, err := http.DefaultClient.Do(req1)
 	s.NoError(err)
 	s.Equal(http.StatusOK, resp1.StatusCode)
 
-	// Second request uses same singleton
 	req2, _ := http.NewRequest("GET", server.URL+"/handler2", nil)
 	req2.Header.Set("X-Request-ID", "req-2")
 	resp2, err := http.DefaultClient.Do(req2)

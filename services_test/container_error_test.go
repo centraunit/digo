@@ -21,20 +21,20 @@ func (s *ErrorTestSuite) SetupTest() {
 
 func (s *ErrorTestSuite) TestErrorCases() {
 	s.Run("InvalidScope", func() {
-		ctx := digo.NewContainerContext(context.Background())
+		_ = digo.NewContainerContext(context.Background())
 		db := &mock.MockDB{}
-		err := digo.BindTransient[mock.Database](db, ctx)
+		err := digo.ProvideTransient[mock.Database](func(_ *digo.ContainerContext) (mock.Database, error) { return db, nil })
 		s.NoError(err)
 
 		// Try to resolve - this should work
-		_, err = digo.ResolveTransient[mock.Database]()
+		_, err = digo.ResolveTransient[mock.Database](context.Background())
 		s.NoError(err)
 
 		// Reset and try to resolve - this should fail
 		digo.Shutdown(true)
-		_, err = digo.ResolveRequest[mock.Database]()
+		_, err = digo.ResolveTransient[mock.Database](context.Background())
 		s.Error(err)
-		s.Contains(err.Error(), "no binding found")
+		s.Contains(err.Error(), "digo: no binding")
 	})
 
 	s.Run("NilBinding", func() {
@@ -45,13 +45,13 @@ func (s *ErrorTestSuite) TestErrorCases() {
 	})
 
 	s.Run("MissingContextValues", func() {
-		ctx := digo.NewContainerContext(context.Background())
+		_ = digo.NewContainerContext(context.Background())
 		db := &mock.MockDB{}
-		err := digo.BindRequest[mock.Database](db, ctx)
+		err := digo.ProvideRequest[mock.Database](func(_ *digo.ContainerContext) (mock.Database, error) { return db, nil })
 		s.NoError(err)
 
 		// Resolve should fail because request_id is missing
-		_, err = digo.ResolveRequest[mock.Database]()
+		_, err = digo.ResolveRequest[mock.Database](context.Background())
 		s.Error(err)
 		var missingErr *digo.MissingContextValueError
 		s.True(errors.As(err, &missingErr))
@@ -59,37 +59,32 @@ func (s *ErrorTestSuite) TestErrorCases() {
 
 	s.Run("RecoveryAfterFailedBoot", func() {
 		failingDB := &mock.FailingDB{ShouldFail: true}
-		ctx := digo.NewContainerContext(context.Background()).
-			WithValue("request_id", "boot-test")
-
-		err := digo.BindRequest[mock.Database](failingDB, ctx)
+		err := digo.BindSingleton[mock.Database](failingDB)
 		s.NoError(err)
 
-		// Boot should fail
 		err = digo.Boot()
 		s.Error(err)
 		s.Contains(err.Error(), "simulated boot failure")
 
-		// Reset and try again with working DB
-		digo.Shutdown(true)
+		digo.Reset()
 		workingDB := &mock.MockDB{}
-		err = digo.BindRequest[mock.Database](workingDB, ctx)
+		err = digo.BindSingleton[mock.Database](workingDB)
 		s.NoError(err)
 		err = digo.Boot()
 		s.NoError(err)
 	})
 
 	s.Run("CircularDependency", func() {
-		ctx := digo.NewContainerContext(context.Background())
-		err := digo.BindTransient[mock.CircularService1](&mock.CircularImpl1{}, ctx)
+		_ = digo.NewContainerContext(context.Background())
+		err := digo.ProvideTransient[mock.CircularService1](func(_ *digo.ContainerContext) (mock.CircularService1, error) { return &mock.CircularImpl1{}, nil })
 		s.NoError(err)
-		err = digo.BindTransient[mock.CircularService2](&mock.CircularImpl2{}, ctx)
+		err = digo.ProvideTransient[mock.CircularService2](func(_ *digo.ContainerContext) (mock.CircularService2, error) { return &mock.CircularImpl2{}, nil })
 		s.NoError(err)
 
-		// Try to resolve - should detect circular dependency
-		_, err = digo.ResolveTransient[mock.CircularService1]()
+		// Try to resolve - should detect digo: circular dependency
+		_, err = digo.ResolveTransient[mock.CircularService1](context.Background())
 		s.Error(err)
-		s.Contains(err.Error(), "circular dependency")
+		s.Contains(err.Error(), "digo: circular dependency")
 	})
 }
 

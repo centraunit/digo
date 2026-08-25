@@ -23,9 +23,9 @@ func (s *EdgeCaseTestSuite) SetupTest() {
 
 func (s *EdgeCaseTestSuite) TestContainerEdgeCases() {
 	s.Run("ResetDuringResolution", func() {
-		ctx := digo.NewContainerContext(context.Background())
+		_ = digo.NewContainerContext(context.Background())
 		db := &mock.MockDB{}
-		err := digo.BindTransient[mock.Database](db, ctx)
+		err := digo.ProvideTransient[mock.Database](func(_ *digo.ContainerContext) (mock.Database, error) { return db, nil })
 		s.NoError(err)
 
 		var wg sync.WaitGroup
@@ -35,7 +35,7 @@ func (s *EdgeCaseTestSuite) TestContainerEdgeCases() {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, err := digo.ResolveTransient[mock.Database]()
+			_, err := digo.ResolveTransient[mock.Database](context.Background())
 			if err != nil {
 				errors <- err
 			}
@@ -98,32 +98,31 @@ func (s *EdgeCaseTestSuite) TestContainerEdgeCases() {
 func (s *EdgeCaseTestSuite) TestContextEdgeCases() {
 	s.Run("NilContextInBinding", func() {
 		db := &mock.MockDB{}
-		err := digo.BindTransient[mock.Database](db, nil)
+		err := digo.ProvideTransient[mock.Database](func(_ *digo.ContainerContext) (mock.Database, error) { return db, nil })
 		s.NoError(err, "Should handle nil context")
 	})
 
 	s.Run("EmptyContextValues", func() {
-		ctx := digo.NewContainerContext(context.Background())
-		db := &mock.MockDB{}
-		err := digo.BindRequest[mock.Database](db, ctx)
-		s.NoError(err)
-		_, err = digo.ResolveRequest[mock.Database]()
+		s.Require().NoError(digo.ProvideRequest[mock.Database](func(ctx *digo.ContainerContext) (mock.Database, error) {
+			return &mock.MockDB{}, nil
+		}))
+		_, err := digo.ResolveRequest[mock.Database](context.Background())
 		s.Error(err, "Should require request_id for request scope")
 	})
 
 	s.Run("ContextWithNilValues", func() {
-		ctx := digo.NewContainerContext(context.Background()).
+		_ = digo.NewContainerContext(context.Background()).
 			WithValue("key", nil)
 		db := &mock.MockDB{}
-		err := digo.BindTransient[mock.Database](db, ctx)
+		err := digo.ProvideTransient[mock.Database](func(_ *digo.ContainerContext) (mock.Database, error) { return db, nil })
 		s.NoError(err, "Should handle nil values in context")
 	})
 
 	s.Run("ContextInheritanceWithNilParent", func() {
 		var ctx1 *digo.ContainerContext = nil
-		ctx := digo.NewContainerContext(ctx1)
+		_ = digo.NewContainerContext(ctx1)
 		db := &mock.MockDB{}
-		err := digo.BindTransient[mock.Database](db, ctx)
+		err := digo.ProvideTransient[mock.Database](func(_ *digo.ContainerContext) (mock.Database, error) { return db, nil })
 		s.NoError(err, "Should handle nil parent context")
 	})
 }
@@ -147,15 +146,15 @@ func (db *InvalidDB) Connect() error {
 
 func (s *EdgeCaseTestSuite) TestResolutionEdgeCases() {
 	s.Run("ResolveNonExistent", func() {
-		_, err := digo.ResolveTransient[mock.Database]()
+		_, err := digo.ResolveTransient[mock.Database](context.Background())
 		var notFoundErr *digo.BindingNotFoundError
 		s.True(errors.As(err, &notFoundErr))
 	})
 
 	s.Run("ResolveDuringShutdown", func() {
-		ctx := digo.NewContainerContext(context.Background())
+		_ = digo.NewContainerContext(context.Background())
 		db := &mock.MockDB{}
-		err := digo.BindTransient[mock.Database](db, ctx)
+		err := digo.ProvideTransient[mock.Database](func(_ *digo.ContainerContext) (mock.Database, error) { return db, nil })
 		s.NoError(err)
 
 		var wg sync.WaitGroup
@@ -175,7 +174,7 @@ func (s *EdgeCaseTestSuite) TestResolutionEdgeCases() {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, err := digo.ResolveTransient[mock.Database]()
+			_, err := digo.ResolveTransient[mock.Database](context.Background())
 			if err != nil {
 				errors <- err
 			}
@@ -191,13 +190,10 @@ func (s *EdgeCaseTestSuite) TestResolutionEdgeCases() {
 }
 
 func (s *EdgeCaseTestSuite) TestResolveRequestEdgeCases() {
-	ctx := digo.NewContainerContext(context.Background())
-	db := &mock.MockDB{}
-
-	// Test resolving without request_id
-	err := digo.BindRequest[mock.Database](db, ctx)
-	s.NoError(err)
-	_, err = digo.ResolveRequest[mock.Database]()
+	s.Require().NoError(digo.ProvideRequest[mock.Database](func(ctx *digo.ContainerContext) (mock.Database, error) {
+		return &mock.MockDB{}, nil
+	}))
+	_, err := digo.ResolveRequest[mock.Database](context.Background())
 	s.Error(err)
 	var missingErr *digo.MissingContextValueError
 	s.True(errors.As(err, &missingErr))

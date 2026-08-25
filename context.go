@@ -5,30 +5,38 @@ import (
 	"sync"
 )
 
-// ContainerContext extends the standard context.Context with container-specific functionality.
-// It provides value inheritance and merging capabilities for service configuration.
+type ctxKeyRequestID struct{}
+type ctxKeyResolveStack struct{}
+type ctxKeyContainer struct{}
+
+// ContainerContext is a context.Context with an extra value bag used at resolve time.
 type ContainerContext struct {
 	context.Context
 	values sync.Map
 }
 
-// NewContainerContext creates a new ContainerContext wrapping a standard context.Context.
-// The new context inherits all values from the parent context.
+// NewContainerContext wraps parent (or Background).
 func NewContainerContext(parent context.Context) *ContainerContext {
 	if parent == nil {
 		parent = context.Background()
 	}
-	return &ContainerContext{
-		Context: parent,
-	}
+	return &ContainerContext{Context: parent}
 }
 
-// WithValue returns a new ContainerContext with the provided key-value pair.
-// The new context inherits all values from the parent context.
-func (c *ContainerContext) WithValue(key, val interface{}) *ContainerContext {
-	newCtx := &ContainerContext{
-		Context: c.Context,
+// AsContainerContext returns ctx as *ContainerContext, wrapping if needed.
+func AsContainerContext(ctx context.Context) *ContainerContext {
+	if ctx == nil {
+		return NewContainerContext(context.Background())
 	}
+	if cc, ok := ctx.(*ContainerContext); ok {
+		return cc
+	}
+	return NewContainerContext(ctx)
+}
+
+// WithValue returns a child with an extra value (receiver is not mutated).
+func (c *ContainerContext) WithValue(key, val interface{}) *ContainerContext {
+	newCtx := &ContainerContext{Context: c.Context}
 	c.values.Range(func(k, v interface{}) bool {
 		newCtx.values.Store(k, v)
 		return true
@@ -37,10 +45,7 @@ func (c *ContainerContext) WithValue(key, val interface{}) *ContainerContext {
 	return newCtx
 }
 
-func (c *ContainerContext) Parent() context.Context {
-	return c.Context
-}
-
+// Value looks up bag values first, then the parent context.
 func (c *ContainerContext) Value(key interface{}) interface{} {
 	if c == nil {
 		return nil
@@ -54,29 +59,77 @@ func (c *ContainerContext) Value(key interface{}) interface{} {
 	return nil
 }
 
-// Values returns the underlying sync.Map of values stored in the context.
-func (c *ContainerContext) Values() *sync.Map {
-	return &c.values
-}
-
-// MergeWith combines values from another ContainerContext.
-// Values from the other context override existing values with the same key.
+// MergeWith copies values from c then other; other's keys win on conflict.
 func (c *ContainerContext) MergeWith(other *ContainerContext) *ContainerContext {
-	newCtx := NewContainerContext(c.Context)
-
-	// First copy values from current context (base values)
-	c.values.Range(func(k, v interface{}) bool {
-		newCtx.values.Store(k, v)
-		return true
-	})
-
-	// Then copy values from the other context (overriding values)
+	parent := context.Background()
+	if c != nil && c.Context != nil {
+		parent = c.Context
+	}
+	newCtx := NewContainerContext(parent)
+	if c != nil {
+		c.values.Range(func(k, v interface{}) bool {
+			newCtx.values.Store(k, v)
+			return true
+		})
+	}
 	if other != nil {
 		other.values.Range(func(k, v interface{}) bool {
 			newCtx.values.Store(k, v)
 			return true
 		})
+		if other.Context != nil {
+			newCtx.Context = other.Context
+		}
 	}
-
 	return newCtx
+}
+
+// WithRequestID stores a non-empty request id on the context.
+func WithRequestID(ctx context.Context, id string) context.Context {
+	return AsContainerContext(ctx).WithValue(ctxKeyRequestID{}, id)
+}
+
+// RequestID returns the request id from ctx, if any.
+func RequestID(ctx context.Context) (string, bool) {
+	if ctx == nil {
+		return "", false
+	}
+	if v := ctx.Value(ctxKeyRequestID{}); v != nil {
+		if s, ok := v.(string); ok && s != "" {
+			return s, true
+		}
+	}
+	return "", false
+}
+
+func withResolveStack(ctx context.Context, stack map[string]struct{}) context.Context {
+	return context.WithValue(AsContainerContext(ctx), ctxKeyResolveStack{}, stack)
+}
+
+func resolveStackFrom(ctx context.Context) map[string]struct{} {
+	if ctx == nil {
+		return nil
+	}
+	if v := ctx.Value(ctxKeyResolveStack{}); v != nil {
+		if s, ok := v.(map[string]struct{}); ok {
+			return s
+		}
+	}
+	return nil
+}
+
+func withContainer(ctx context.Context, c *Container) context.Context {
+	return context.WithValue(AsContainerContext(ctx), ctxKeyContainer{}, c)
+}
+
+func containerFrom(ctx context.Context) *Container {
+	if ctx == nil {
+		return nil
+	}
+	if v := ctx.Value(ctxKeyContainer{}); v != nil {
+		if c, ok := v.(*Container); ok {
+			return c
+		}
+	}
+	return nil
 }

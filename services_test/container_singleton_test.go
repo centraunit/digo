@@ -1,7 +1,6 @@
 package digo_test
 
 import (
-	"context"
 	"testing"
 
 	"github.com/centraunit/digo"
@@ -11,13 +10,10 @@ import (
 
 func TestContainerSingleton(t *testing.T) {
 	t.Run("ContainerIsSingleton", func(t *testing.T) {
-		digo.Shutdown(true)
+		digo.Reset()
 
 		db := &mock.MockDB{}
-		ctx := digo.NewContainerContext(context.Background()).
-			WithValue("request_id", "app-singleton")
-
-		err := digo.BindSingleton[mock.Database](db, ctx)
+		err := digo.BindSingleton[mock.Database](db)
 		assert.NoError(t, err)
 
 		instance1, err1 := digo.ResolveSingleton[mock.Database]()
@@ -25,17 +21,14 @@ func TestContainerSingleton(t *testing.T) {
 
 		assert.NoError(t, err1)
 		assert.NoError(t, err2)
-		assert.Same(t, instance1, instance2, "Singleton should return same instance")
+		assert.Same(t, instance1, instance2)
 	})
 
 	t.Run("SingletonStateConsistency", func(t *testing.T) {
-		digo.Shutdown(true)
+		digo.Reset()
 
 		service := &mock.SingletonTestService{}
-		ctx := digo.NewContainerContext(context.Background()).
-			WithValue("request_id", "app-singleton")
-
-		err := digo.BindSingleton[mock.Service](service, ctx)
+		err := digo.BindSingleton[mock.Service](service)
 		assert.NoError(t, err)
 
 		instance1, err1 := digo.ResolveSingleton[mock.Service]()
@@ -43,6 +36,6 @@ func TestContainerSingleton(t *testing.T) {
 
 		assert.NoError(t, err1)
 		assert.NoError(t, err2)
-		assert.Same(t, instance1, instance2, "Singleton should maintain state")
+		assert.Same(t, instance1, instance2)
 	})
 }
